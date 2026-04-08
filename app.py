@@ -14,6 +14,7 @@ from ui.options_tab import create_options_tab
 from ui.instructions_tab import create_instructions_tab
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
+server = app.server
 app.title = "Газовый расчетник"
 
 # Цветовая схема
@@ -886,4 +887,4 @@ def export_excel(n_clicks, results):
 
 
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run_server(debug=False)
