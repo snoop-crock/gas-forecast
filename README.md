@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 # Газовый расчетник
 
 ## Описание
@@ -18,3 +19,77 @@
 git clone https://github.com/your-repo/gas_forecast_app.git
 cd gas_forecast_app
 ```
+=======
+# \# Газовый расчетник
+
+# 
+
+# Веб-приложение для прогнозирования добычи газа на основе модели материального баланса.
+
+# 
+
+# \## Возможности
+
+# 
+
+# \- 📝 Ввод параметров месторождения (пласт, скважины, ДКС)
+
+# \- 📊 Помесячный и годовой прогноз добычи
+
+# \- 📈 Интерактивные графики (Plotly)
+
+# \- 💾 Экспорт результатов в Excel
+
+# \- ⚙️ Настройка методов расчета (PVT, трение)
+
+# 
+
+# \## Технологии
+
+# 
+
+# \- Python 3.10+
+
+# \- Dash / Plotly
+
+# \- Pandas / NumPy
+
+# 
+
+# \## Установка и запуск
+
+# 
+
+# ```bash
+
+# \# Клонировать репозиторий
+
+# git clone https://github.com/ВАШ\_АККАУНТ/gas-forecast-app.git
+
+# cd gas-forecast-app
+
+# 
+
+# \# Создать виртуальное окружение
+
+# python -m venv venv
+
+# source venv/bin/activate  # Linux/Mac
+
+# \# или
+
+# venv\\Scripts\\activate  # Windows
+
+# 
+
+# \# Установить зависимости
+
+# pip install -r requirements.txt
+
+# 
+
+# \# Запустить приложение
+
+# python app.py
+
+>>>>>>> Stashed changes
