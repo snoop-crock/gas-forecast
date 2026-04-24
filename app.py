@@ -5,7 +5,7 @@ import pandas as pd
 import os
 import json
 
-from calculations import calculate_forecast, default_params
+from calculations import calculate_forecast, default_params, validate_forecast_params
 from ui.excel_export import export_to_excel
 from ui.input_tab import create_input_tab
 from ui.results_tab import create_results_tab
@@ -166,7 +166,97 @@ app.index_string = '''
                 color: #10b981;
             }
             
+            /* ========== TOGGLE SWITCH ========== */
+            .toggle-container {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin-bottom: 16px;
+            }
+            
+            .toggle-switch {
+                position: relative;
+                width: 60px;
+                height: 30px;
+                background: #475569;
+                border-radius: 15px;
+                cursor: pointer;
+                transition: background 0.3s;
+            }
+            
+            .toggle-switch.active {
+                background: #faae19;
+            }
+            
+            .toggle-slider {
+                position: absolute;
+                top: 2px;
+                left: 2px;
+                width: 26px;
+                height: 26px;
+                background: white;
+                border-radius: 50%;
+                transition: transform 0.3s;
+            }
+            
+            .toggle-switch.active .toggle-slider {
+                transform: translateX(30px);
+            }
+            
+            .toggle-label {
+                font-size: 14px;
+                font-weight: 500;
+                color: white;
+                cursor: pointer;
+            }
+            
+
+            /* ========== TOGGLE SWITCH ========== */
+            .toggle-container {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                margin-bottom: 16px;
+            }
+            
+            .toggle-switch {
+                position: relative;
+                width: 60px;
+                height: 30px;
+                background: #475569;
+                border-radius: 15px;
+                cursor: pointer;
+                transition: background 0.3s;
+            }
+            
+            .toggle-switch.active {
+                background: #faae19;
+            }
+            
+            .toggle-slider {
+                position: absolute;
+                top: 2px;
+                left: 2px;
+                width: 26px;
+                height: 26px;
+                background: white;
+                border-radius: 50%;
+                transition: transform 0.3s;
+            }
+            
+            .toggle-switch.active .toggle-slider {
+                transform: translateX(30px);
+            }
+            
+            .toggle-label {
+                font-size: 14px;
+                font-weight: 500;
+                color: white;
+                cursor: pointer;
+            }
+            
             /* ========== MAIN ========== */
+
             .main-container {
                 max-width: 1280px;
                 margin: 0 auto;
@@ -358,10 +448,21 @@ app.layout = html.Div([
                 html.Div("Г", className="logo-icon"),
                 html.Div([
                     html.H1("Газовый Расчётник", className="logo-title"),
-                    html.P("Прогноз добычи газа - упрощенный вариант",
-                           className="logo-subtitle")
+                    html.P("Прогноз добычи газа - упрощенный вариант", id='logo-subtitle', className="logo-subtitle")
                 ])
             ], className="logo-container"),
+
+            # Выбор режима
+            html.Div([
+                html.Label("Режим расчета:", style={'fontSize': '14px', 'fontWeight': '500', 'marginBottom': '8px', 'display': 'block', 'color': 'white'}),
+                html.Div([
+                    html.Span("Упрощенный", className="toggle-label", id="toggle-simple", n_clicks=0),
+                    html.Div([
+                        html.Div(className="toggle-slider", id="toggle-slider")
+                    ], className="toggle-switch", id="toggle-switch", n_clicks=0),
+                    html.Span("Усложненный", className="toggle-label", id="toggle-advanced", n_clicks=0)
+                ], className="toggle-container")
+            ], style={'marginBottom': '20px'}),
 
             html.Div([
                 html.Button("Рассчитать", id='btn-calculate',
@@ -370,6 +471,8 @@ app.layout = html.Div([
                             n_clicks=0, className="btn-secondary"),
                 html.Button("Экспорт в Excel", id='btn-export',
                             n_clicks=0, className="btn-success"),
+                # html.Button("Экспорт в PDF", id='btn-export-pdf',
+                #             n_clicks=0, className="btn-success"),
             ], className="header-buttons")
         ], className="header-content")
     ], className="header"),
@@ -393,6 +496,7 @@ app.layout = html.Div([
 
         dcc.Store(id='store-params', data=default_params.copy()),
         dcc.Store(id='store-results', data={}),
+        dcc.Store(id='store-mode', data='simple'),
         dcc.Store(id='toast-control',
                   data={'show': False, 'message': '', 'type': 'success'}),
         dcc.Store(id='table-sort-column', data=None),
@@ -401,6 +505,8 @@ app.layout = html.Div([
         dcc.Store(id='period-store', data='monthly'),
 
         dcc.Download(id='download-excel'),
+
+        dcc.Download(id='download-pdf'),
 
         # Toast уведомление
         html.Div(id='toast', className="toast-hidden", children=[]),
@@ -459,6 +565,45 @@ def update_toast(toast_control, n_intervals):
     return 'toast-hidden', [], True, 0
 
 
+# ==================== ПЕРЕКЛЮЧЕНИЕ РЕЖИМА ====================
+@app.callback(
+    [Output('store-mode', 'data'),
+     Output('toggle-switch', 'className')],
+    [Input('toggle-simple', 'n_clicks'),
+     Input('toggle-advanced', 'n_clicks'),
+     Input('toggle-switch', 'n_clicks')],
+    [State('store-mode', 'data')]
+)
+def toggle_mode(simple_clicks, advanced_clicks, switch_clicks, current_mode):
+    ctx = callback_context
+    if not ctx.triggered:
+        class_name = "toggle-switch active" if current_mode == 'advanced' else "toggle-switch"
+        return current_mode or 'simple', class_name
+    
+    triggered_id = ctx.triggered[0]['prop_id'].split('.')[0]
+    
+    if triggered_id == 'toggle-simple':
+        return 'simple', "toggle-switch"
+    elif triggered_id == 'toggle-advanced':
+        return 'advanced', "toggle-switch active"
+    elif triggered_id == 'toggle-switch':
+        next_mode = 'simple' if current_mode == 'advanced' else 'advanced'
+        return next_mode, ("toggle-switch active" if next_mode == 'advanced' else "toggle-switch")
+    
+    return current_mode or 'simple', "toggle-switch"
+
+# ==================== ОБНОВЛЕНИЕ ПОДЗАГОЛОВКА ====================
+@app.callback(
+    Output('logo-subtitle', 'children'),
+    Input('store-mode', 'data')
+)
+def update_subtitle(mode):
+    if mode == 'advanced':
+        return 'Прогноз добычи газа - усложненный вариант'
+    else:
+        return 'Прогноз добычи газа - упрощенный вариант'
+
+
 # ==================== РЕНДЕР ВКЛАДОК ====================
 @app.callback(
     Output('tabs-content', 'children'),
@@ -480,10 +625,11 @@ def render_tab(tab):
 # ==================== ЗАГРУЗКА ВКЛАДОК ====================
 @app.callback(
     Output('input-tab-container', 'children'),
-    Input('store-params', 'data')
+    [Input('store-params', 'data'),
+     Input('store-mode', 'data')]
 )
-def load_input_tab(params):
-    return create_input_tab(params, colors)
+def load_input_tab(params, mode):
+    return create_input_tab(params, colors, mode)
 
 
 @app.callback(
@@ -542,6 +688,43 @@ INPUT_IDS = [
     'input-DKS_mode', 'input-P_vh_DKS', 'input-P_vyh_DKS', 'input-N_DKS',
     'input-VGF_nach', 'input-dVGF_dG', 'input-VGF_krit'
 ]
+
+INPUT_PARAM_MAPPING = {
+    'input-start_year': 'start_year',
+    'input-T_max': 'T_max',
+    'input-Q_polka': 'Q_polka',
+    'input-plateau_mode': 'plateau_mode',
+    'input-target_recovery_rate': 'target_recovery_rate',
+    'input-P_pl': 'P_pl',
+    'input-T_pl': 'T_pl',
+    'input-G_nach': 'G_nach',
+    'input-rho_otn': 'rho_otn',
+    'input-N_skv': 'N_skv',
+    'input-H_skv': 'H_skv',
+    'input-d_NKT': 'd_NKT',
+    'input-a_coef': 'a_coef',
+    'input-b_coef': 'b_coef',
+    'input-dP_max': 'dP_max',
+    'input-K_eks': 'K_eks',
+    'input-DKS_mode': 'DKS_mode',
+    'input-P_vh_DKS': 'P_vh_DKS',
+    'input-P_vyh_DKS': 'P_vyh_DKS',
+    'input-N_DKS': 'N_DKS',
+    'input-VGF_nach': 'VGF_nach',
+    'input-dVGF_dG': 'dVGF_dG',
+    'input-VGF_krit': 'VGF_krit'
+}
+
+
+def build_calc_params(params):
+    merged = default_params.copy()
+    if params:
+        merged.update(params)
+
+    calc_params = {param_name: merged.get(param_name, default_value) for param_name, default_value in default_params.items()}
+    calc_params['wells_schedule'] = merged.get('wells_schedule', [])
+    calc_params['recovery_schedule'] = merged.get('recovery_schedule', [])
+    return calc_params
 
 
 # ==================== КНОПКА СБРОСА ====================
@@ -602,24 +785,34 @@ def sync_inputs_to_store(*args):
     else:
         current_params = current_params.copy()
 
-    param_mapping = {
-        'input-start_year': 'start_year', 'input-T_max': 'T_max',
-        'input-Q_polka': 'Q_polka', 'input-plateau_mode': 'plateau_mode',
-        'input-target_recovery_rate': 'target_recovery_rate',
-        'input-P_pl': 'P_pl', 'input-T_pl': 'T_pl', 'input-G_nach': 'G_nach',
-        'input-rho_otn': 'rho_otn', 'input-N_skv': 'N_skv', 'input-H_skv': 'H_skv',
-        'input-d_NKT': 'd_NKT', 'input-a_coef': 'a_coef', 'input-b_coef': 'b_coef',
-        'input-dP_max': 'dP_max', 'input-K_eks': 'K_eks', 'input-DKS_mode': 'DKS_mode',
-        'input-P_vh_DKS': 'P_vh_DKS', 'input-P_vyh_DKS': 'P_vyh_DKS', 'input-N_DKS': 'N_DKS',
-        'input-VGF_nach': 'VGF_nach', 'input-dVGF_dG': 'dVGF_dG', 'input-VGF_krit': 'VGF_krit'
-    }
-
     for i, input_id in enumerate(INPUT_IDS):
         value = args[i]
         if value is not None:
-            param_name = param_mapping.get(input_id)
+            param_name = INPUT_PARAM_MAPPING.get(input_id)
             if param_name:
                 current_params[param_name] = value
+
+    return current_params
+
+
+# ==================== СОХРАНЕНИЕ ДАННЫХ ИЗ ТАБЛИЦ ====================
+@app.callback(
+    Output('store-params', 'data', allow_duplicate=True),
+    [Input('wells-table', 'data'),
+     Input('recovery-rate-table', 'data')],
+    [State('store-params', 'data')],
+    prevent_initial_call=True
+)
+def sync_table_data(wells_data, recovery_data, current_params):
+    if current_params is None:
+        current_params = default_params.copy()
+    else:
+        current_params = current_params.copy()
+
+    if wells_data:
+        current_params['wells_schedule'] = wells_data
+    if recovery_data:
+        current_params['recovery_schedule'] = recovery_data
 
     return current_params
 
@@ -638,6 +831,26 @@ def run_calculation(n_clicks, params):
 
     if params is None:
         params = default_params.copy()
+
+    # Валидация параметров
+    validation_errors = []
+    if params.get('P_pl', 0) <= 0:
+        validation_errors.append("Начальное пластовое давление должно быть > 0")
+    if params.get('T_pl', 0) <= 0:
+        validation_errors.append("Пластовая температура должна быть > 0")
+    if params.get('G_nach', 0) <= 0:
+        validation_errors.append("Начальные запасы должны быть > 0")
+    if not (0 < params.get('rho_otn', 0) < 1):
+        validation_errors.append("Относительная плотность газа должна быть между 0 и 1")
+    if params.get('N_skv', 0) <= 0:
+        validation_errors.append("Количество скважин должно быть > 0")
+    if params.get('H_skv', 0) <= 0:
+        validation_errors.append("Глубина скважин должна быть > 0")
+    if params.get('K_eks', 0) <= 0 or params.get('K_eks', 0) > 1:
+        validation_errors.append("Коэффициент эксплуатации должен быть между 0 и 1")
+
+    if validation_errors:
+        return {}, {'show': True, 'message': 'Ошибки валидации: ' + '; '.join(validation_errors), 'type': 'error'}
 
     calc_params = {
         'start_year': params.get('start_year', 2025),
@@ -664,7 +877,9 @@ def run_calculation(n_clicks, params):
         'dVGF_dG': params.get('dVGF_dG', 10),
         'VGF_krit': params.get('VGF_krit', 200),
         'opt_friction': params.get('opt_friction', 1),
-        'pvt_method': params.get('pvt_method', 'latonov')
+        'pvt_method': params.get('pvt_method', 'latonov'),
+        'wells_schedule': params.get('wells_schedule', []),
+        'recovery_schedule': params.get('recovery_schedule', [])
     }
 
     try:
@@ -886,5 +1101,109 @@ def export_excel(n_clicks, results):
         return dash.no_update
 
 
+# ==================== ЗАГРУЗКА ДАННЫХ В ТАБЛИЦЫ ПРИ ПЕРЕКЛЮЧЕНИИ РЕЖИМА ====================
+@app.callback(
+    [Output('wells-table', 'data', allow_duplicate=True),
+     Output('recovery-rate-table', 'data', allow_duplicate=True)],
+    [Input('store-mode', 'data'),
+     Input('store-params', 'data')],
+    prevent_initial_call=True
+)
+def load_tables_on_mode_change(mode, params):
+    """При переключении на усложненный режим загружает данные из store-params в таблицы"""
+    if mode != 'advanced':
+        return dash.no_update, dash.no_update
+    
+    if params is None:
+        params = default_params.copy()
+    
+    wells = params.get('wells_schedule', [])
+    recovery = params.get('recovery_schedule', [])
+    
+    # Если нет данных, создаем начальную строку
+    if not wells:
+        wells = [{"Год": params.get('start_year', 2025), "Количество скважин": params.get('N_skv', 10)}]
+    if not recovery:
+        recovery = [{"Год": params.get('start_year', 2025), "Темп отбора (%)": params.get('target_recovery_rate', 1.5)}]
+    
+    return wells, recovery
+
+
+# # ==================== СОХРАНЕНИЕ ТАБЛИЦЫ СКВАЖИН В STORE ====================
+# @app.callback(
+#     Output('store-params', 'data', allow_duplicate=True),
+#     Input('wells-table', 'data'),
+#     [State('store-params', 'data')],
+#     prevent_initial_call=True
+# )
+# def save_wells_table(wells_data, current_params):
+#     if wells_data is None:
+#         return dash.no_update
+#     if current_params is None:
+#         current_params = default_params.copy()
+#     else:
+#         current_params = current_params.copy()
+#     current_params['wells_schedule'] = wells_data
+#     print(f"✅ Сохранены скважины: {len(wells_data)} записей")
+#     return current_params
+
+
+# # ==================== СОХРАНЕНИЕ ТАБЛИЦЫ ТЕМПА ОТБОРА В STORE ====================
+# @app.callback(
+#     Output('store-params', 'data', allow_duplicate=True),
+#     Input('recovery-rate-table', 'data'),
+#     [State('store-params', 'data')],
+#     prevent_initial_call=True
+# )
+# def save_recovery_table(recovery_data, current_params):
+#     if recovery_data is None:
+#         return dash.no_update
+#     if current_params is None:
+#         current_params = default_params.copy()
+#     else:
+#         current_params = current_params.copy()
+#     current_params['recovery_schedule'] = recovery_data
+#     print(f"✅ Сохранен темп отбора: {len(recovery_data)} записей")
+#     return current_params
+
+
+# ==================== ДОБАВЛЕНИЕ/УДАЛЕНИЕ СТРОК В ТАБЛИЦАХ ====================
+# @app.callback(
+#     Output('wells-table', 'data', allow_duplicate=True),
+#     Input('btn-add-wells-row', 'n_clicks'),
+#     State('wells-table', 'data'),
+#     prevent_initial_call=True
+# )
+# def add_wells_row(n_clicks, current_data):
+#     if n_clicks is None or n_clicks == 0:
+#         return dash.no_update
+#     if current_data is None:
+#         current_data = []
+#     if current_data:
+#         last_year = current_data[-1].get('Год', 2025)
+#         last_value = current_data[-1].get('Количество скважин', 10)
+#         new_row = {'Год': last_year + 1, 'Количество скважин': last_value}
+#         return current_data + [new_row]
+#     return [{'Год': 2025, 'Количество скважин': 10}]
+
+
+# @app.callback(
+#     Output('recovery-rate-table', 'data', allow_duplicate=True),
+#     Input('btn-add-recovery-row', 'n_clicks'),
+#     State('recovery-rate-table', 'data'),
+#     prevent_initial_call=True
+# )
+# def add_recovery_row(n_clicks, current_data):
+#     if n_clicks is None or n_clicks == 0:
+#         return dash.no_update
+#     if current_data is None:
+#         current_data = []
+#     if current_data:
+#         last_year = current_data[-1].get('Год', 2025)
+#         last_value = current_data[-1].get('Темп отбора (%)', 1.5)
+#         new_row = {'Год': last_year + 1, 'Темп отбора (%)': last_value}
+#         return current_data + [new_row]
+#     return [{'Год': 2025, 'Темп отбора (%)': 1.5}]
+
 if __name__ == '__main__':
-    app.run_server(debug=False)
+    app.run_server(debug=True)
