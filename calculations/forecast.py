@@ -47,6 +47,9 @@ default_params = {
     "pvt_method": "latonov",
     "wells_schedule": [],
     "recovery_schedule": [],
+    'choke_diameter': 8,               # диаметр штуцера (мм), по умолчанию 8 мм
+    'choke_coefficient': 0.85,         # коэффициент расхода
+    'gathering_loss': 0.03,   
 }
 
 
@@ -273,20 +276,35 @@ def calculate_forecast(params: dict[str, Any]) -> dict[str, Any]:
         else:
             q_monthly = q_monthly_potential
         q_total_day = q_monthly * 1e6 / days if days else 0
-
+        
+        # 6. Устьевое давление
         if opt_friction == 1:
             p_u = Hydraulics.P_u_from_P_zab(p_zab_max, q_total_day, h_skv, rho_otn, t_pl, d_nkt)
         else:
             p_u = max(0.5, p_zab_max - 0.001 * h_skv * rho_otn)
+        
+        # 6.5. Штуцирование (всегда включено)
+        p_u = Hydraulics.choke_pressure_drop(
+            p_u, 
+            q_total_day / 1e6,  # перевод в млн.м³/сут
+            D_choke_mm=params.get('choke_diameter', 8),
+            C=params.get('choke_coefficient', 0.85),
+            rho_otn=rho_otn
+        )
+
+        # 6.6. Потери в газосборной сети (шлейф)
+        gathering_loss = params.get('gathering_loss', 0.03)
+        P_before_dks = p_u - gathering_loss
+        P_before_dks = max(0.5, P_before_dks)
 
         if dks_mode == "ограничительный":
-            q_max_dks = DKS.Q_max_from_power(n_dks_max, p_u, p_vyh_dks, t_pl, rho_otn) * 1e6
+            q_max_dks = DKS.Q_max_from_power(n_dks_max, P_before_dks, p_vyh_dks, t_pl, rho_otn) * 1e6
             if q_max_dks > 0 and q_total_day > q_max_dks:
                 q_total_day = q_max_dks
                 q_monthly = q_total_day * days / 1e6
             n_dks = n_dks_max
         else:
-            n_dks = DKS.power_calc(q_total_day / 1e6, p_u, p_vyh_dks, t_pl, rho_otn)
+            n_dks = DKS.power_calc(q_total_day / 1e6, P_before_dks, p_vyh_dks, t_pl, rho_otn)
 
         q_cum += q_monthly * 1e9
         vgf = WaterInflux.VGF_from_cumulative(vgf_nach, dvgf_dg, q_cum, g_nach, vgf_krit)
