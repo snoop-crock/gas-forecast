@@ -8,6 +8,7 @@ from .dcs import DKS
 from .hydraulics import Hydraulics
 from .inflow import Inflow
 from .material_balance import MaterialBalance
+from .pvt import PVT
 from .scenario import (
     RECOVERY_RATE_COLUMN,
     WELLS_COLUMN,
@@ -263,6 +264,78 @@ def _build_output_schedules(params: dict[str, Any]) -> tuple[list[dict[str, Any]
     return wells_schedule, recovery_schedule
 
 
+def _check_production_constraints(
+    test_prod_bcm: float,
+    cum_prod_bcm: float,
+    g_nach_bcm: float,
+    n_wells: int,
+    p_pl_init: float,
+    t_pl_k: float,
+    rho_otn: float,
+    a_coef: float,
+    b_coef: float,
+    d_p_max: float,
+    theta: float,
+    s_param: float,
+    vgf_nach: float,
+    dvgf_dg: float,
+    vgf_krit: float,
+    min_debit_well: float,
+    min_p_wellhead: float,
+    dks_mode: str,
+    p_vh_dks: float,
+    p_vyh_dks: float,
+    n_dks_max: float,
+    t_in_dks_k: float,
+) -> bool:
+    """Check if production meets all constraints (like VBA CheckConstraints)"""
+    if n_wells <= 0:
+        return False
+    
+    g_nach = g_nach_bcm * 1e9
+    cum_prod = cum_prod_bcm * 1e9
+    test_prod = test_prod_bcm * 1e9
+    
+    temp_remaining = g_nach - (cum_prod + test_prod)
+    if temp_remaining < 0:
+        return False
+    
+    # Calc wellhead pressure for this production level
+    debit_per_well_thousand = (test_prod_bcm * 1e6) / n_wells / 365
+    vgf = WaterInflux.VGF_from_cumulative(vgf_nach, dvgf_dg, cum_prod + test_prod, g_nach, vgf_krit)
+    
+    # Reservoir pressure with iterations
+    p_pl_curr = p_pl_init * (temp_remaining / g_nach_bcm)
+    for _ in range(20):
+        z_f = PVT.z_factor(p_pl_curr, t_pl_k, rho_otn)
+        p_over_z = PVT.z_factor(p_pl_init, t_pl_k, rho_otn)
+        if p_over_z > 0:
+            p_pl_curr = (p_pl_init / p_over_z) * z_f * (temp_remaining / g_nach_bcm)
+        if p_pl_curr < 0:
+            return False
+    
+    # Inflow pressure with water
+    p_zab_max = max(0.5, p_pl_curr - d_p_max)
+    q_skv = Inflow.Q_gas(p_pl_curr, p_zab_max, a_coef, b_coef)
+    q_skv *= WaterInflux.rel_perm_gas(vgf, vgf_krit)
+    
+    if q_skv < min_debit_well:
+        return False
+    
+    # Wellhead pressure via theta/S
+    p_wh = _wellhead_pressure_mpa(p_zab_max, q_skv, theta, s_param)
+    if p_wh < min_p_wellhead:
+        return False
+    
+    # DKS power check if restrictive mode
+    if dks_mode == "ограничительный" and n_dks_max > 0:
+        dks_power = DKS.power_calc(test_prod_bcm, p_wh, p_vyh_dks, t_in_dks_k, rho_otn)
+        if dks_power > n_dks_max:
+            return False
+    
+    return True
+
+
 def find_optimal_recovery_rate(params: dict[str, Any], max_years: int = 30) -> tuple[int, int]:
     g_nach = params["G_nach"] * 1e9
     p_pl_init = params["P_pl"]
@@ -273,53 +346,77 @@ def find_optimal_recovery_rate(params: dict[str, Any], max_years: int = 30) -> t
     a_coef = params["a_coef"]
     b_coef = params["b_coef"]
     d_p_max = params["dP_max"]
+    theta = float(params.get("theta", 0) or 0)
+    s_param = float(params.get("S_param", 0) or 0)
+    min_debit_well = float(params.get("min_debit_well", 0) or 0)
+    min_p_wellhead = float(params.get("min_p_wellhead", 0) or 0)
     vgf_nach = params.get("VGF_nach", 0)
     dvgf_dg = params.get("dVGF_dG", 10)
     vgf_krit = params.get("VGF_krit", 200)
+    dks_mode = params.get("DKS_mode", "расчетный")
+    p_vh_dks = params.get("P_vh_DKS", 5)
+    p_vyh_dks = params.get("P_vyh_DKS", 7.5)
+    n_dks_max = params.get("N_DKS", 50)
+    t_in_dks = float(params.get("T_in_DKS", params["T_pl"]) or params["T_pl"]) + 273.15
 
     best_rate = 1
     best_years = 0
 
     for rate in range(1, 21):
-        annual_target = (rate / 100) * (g_nach / 1e9)
-        monthly_target = annual_target / 12
+        annual_target_bcm = (rate / 100) * params["G_nach"]
         q_cum = 0.0
-        p_pl_curr = p_pl_init
-        vgf = vgf_nach
         years_on_target = 0
 
         for year in range(1, max_years + 1):
             year_ok = True
-            for _month in range(12):
-                if q_cum > 0:
-                    p_pl_curr = MaterialBalance.pressure_from_cumulative(
-                        p_pl_init,
-                        t_pl,
-                        rho_otn,
-                        g_nach,
-                        q_cum,
-                        prev_P_pl=p_pl_curr,
-                    )
-
-                if p_pl_curr < 0.5:
-                    year_ok = False
-                    break
-
-                p_zab_max = max(0.5, p_pl_curr - d_p_max)
-                q_skv_day = Inflow.Q_gas(p_pl_curr, p_zab_max, a_coef, b_coef)
-                q_skv_day *= WaterInflux.rel_perm_gas(vgf, vgf_krit)
-                q_monthly_potential = q_skv_day * n_skv * k_eks * 30 / 1e6
-
-                if q_monthly_potential < monthly_target * 0.98:
-                    year_ok = False
-                    break
-
-                q_cum += monthly_target * 1e9
-                vgf = WaterInflux.VGF_from_cumulative(vgf_nach, dvgf_dg, q_cum, g_nach, vgf_krit)
-
-            if not year_ok:
+            
+            # Binary search for achievable monthly production
+            prod_low = 0.0
+            prod_high = annual_target_bcm / 12
+            tolerance = 0.01
+            achievable_prod = 0.0
+            
+            while (prod_high - prod_low) > tolerance:
+                prod_mid = (prod_low + prod_high) / 2
+                constraints_ok = _check_production_constraints(
+                    test_prod_bcm=prod_mid,
+                    cum_prod_bcm=q_cum / 1e9,
+                    g_nach_bcm=params["G_nach"],
+                    n_wells=n_skv,
+                    p_pl_init=p_pl_init,
+                    t_pl_k=t_pl,
+                    rho_otn=rho_otn,
+                    a_coef=a_coef,
+                    b_coef=b_coef,
+                    d_p_max=d_p_max,
+                    theta=theta,
+                    s_param=s_param,
+                    vgf_nach=vgf_nach,
+                    dvgf_dg=dvgf_dg,
+                    vgf_krit=vgf_krit,
+                    min_debit_well=min_debit_well,
+                    min_p_wellhead=min_p_wellhead,
+                    dks_mode=dks_mode,
+                    p_vh_dks=p_vh_dks,
+                    p_vyh_dks=p_vyh_dks,
+                    n_dks_max=n_dks_max,
+                    t_in_dks_k=t_in_dks,
+                )
+                
+                if constraints_ok:
+                    prod_low = prod_mid
+                    achievable_prod = prod_mid
+                else:
+                    prod_high = prod_mid
+            
+            if achievable_prod < (annual_target_bcm / 12 * 0.98):
+                year_ok = False
+            
+            if year_ok:
+                q_cum += achievable_prod * 1e9
+                years_on_target = year
+            else:
                 break
-            years_on_target = year
 
         if years_on_target > best_years:
             best_years = years_on_target
@@ -426,10 +523,50 @@ def calculate_forecast(params: dict[str, Any]) -> dict[str, Any]:
         q_monthly_potential = q_total_day_potential * days / 1e6
 
         meets_target = q_monthly_potential >= target_monthly_production and target_monthly_production > 0
-        if target_monthly_production > 0:
-            q_monthly = min(q_monthly_potential, target_monthly_production)
+        
+        # Use binary search in restrictive DKS mode to find max production within DKS power limit
+        if dks_mode == "ограничительный" and n_dks_max > 0:
+            prod_low = 0.0
+            prod_high = min(q_monthly_potential, target_monthly_production) if target_monthly_production > 0 else q_monthly_potential
+            tolerance = 0.01
+            q_monthly = 0.0
+            
+            while (prod_high - prod_low) > tolerance:
+                prod_mid = (prod_low + prod_high) / 2
+                constraints_ok = _check_production_constraints(
+                    test_prod_bcm=prod_mid,
+                    cum_prod_bcm=q_cum / 1e9,
+                    g_nach_bcm=params["G_nach"],
+                    n_wells=current_wells,
+                    p_pl_init=p_pl_init,
+                    t_pl_k=t_pl,
+                    rho_otn=rho_otn,
+                    a_coef=a_coef,
+                    b_coef=b_coef,
+                    d_p_max=d_p_max,
+                    theta=theta,
+                    s_param=s_param,
+                    vgf_nach=vgf_nach,
+                    dvgf_dg=dvgf_dg,
+                    vgf_krit=vgf_krit,
+                    min_debit_well=min_debit_well,
+                    min_p_wellhead=min_p_wellhead,
+                    dks_mode=dks_mode,
+                    p_vh_dks=p_vh_dks,
+                    p_vyh_dks=p_vyh_dks,
+                    n_dks_max=n_dks_max,
+                    t_in_dks_k=t_in_dks,
+                )
+                if constraints_ok:
+                    prod_low = prod_mid
+                    q_monthly = prod_mid
+                else:
+                    prod_high = prod_mid
         else:
-            q_monthly = q_monthly_potential
+            if target_monthly_production > 0:
+                q_monthly = min(q_monthly_potential, target_monthly_production)
+            else:
+                q_monthly = q_monthly_potential
 
         q_total_day = q_monthly * 1e6 / days if days else 0
 
