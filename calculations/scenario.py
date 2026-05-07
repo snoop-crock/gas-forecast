@@ -95,6 +95,7 @@ def validate_forecast_params(params: dict[str, Any]) -> list[str]:
         (0 < params.get("K_eks", 0) <= 1, "Коэффициент эксплуатации должен быть в диапазоне (0; 1]"),
         (params.get("d_NKT", 0) > 0, "Диаметр НКТ должен быть > 0"),
         (params.get("dP_max", 0) > 0, "Максимальная депрессия должна быть > 0"),
+        (params.get("Q_max_DKS", 0) >= 0, "Макс. производительность ДКС не может быть отрицательной"),
     ]
 
     for is_valid, message in validators:

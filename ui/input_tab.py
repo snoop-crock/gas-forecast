@@ -47,20 +47,20 @@ def _label(text):
 
 
 def create_input_tab(params, colors, mode="simple"):
-    """Создает вкладку ввода параметров в современном стиле."""
+    """Создает вкладку ввода параметров с произвольным вводом чисел."""
 
     wells_table_data = _build_schedule_data(
         params,
         schedule_key="wells_schedule",
         value_column=WELLS_COLUMN,
-        default_value=params.get("N_skv", 10),
+        default_value=params.get("N_skv", 15),
         cast_type=int,
     )
     recovery_table_data = _build_schedule_data(
         params,
         schedule_key="recovery_schedule",
         value_column=RECOVERY_RATE_COLUMN,
-        default_value=params.get("target_recovery_rate", 1.5),
+        default_value=params.get("target_recovery_rate", 5.0),
         cast_type=float,
     )
 
@@ -125,21 +125,21 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("Начальное пластовое давление (МПа)"),
-                        dcc.Input(id="input-P_pl", type="number", value=params.get("P_pl", 25), step=0.5, style=_input_style()),
+                        dcc.Input(id="input-P_pl", type="number", value=params.get("P_pl", 10), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Пластовая температура (°C)"),
-                        dcc.Input(id="input-T_pl", type="number", value=params.get("T_pl", 80), step=1, style=_input_style()),
+                        dcc.Input(id="input-T_pl", type="number", value=params.get("T_pl", 50), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Начальные запасы (млрд м³)"),
-                        dcc.Input(id="input-G_nach", type="number", value=params.get("G_nach", 100), step=10, style=_input_style()),
+                        dcc.Input(id="input-G_nach", type="number", value=params.get("G_nach", 100), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex", "marginBottom": "12px"}),
                 html.Div([
                     html.Div([
                         _label("Относительная плотность газа"),
-                        dcc.Input(id="input-rho_otn", type="number", value=params.get("rho_otn", 0.6), step=0.05, style=_input_style()),
+                        dcc.Input(id="input-rho_otn", type="number", value=params.get("rho_otn", 0.56), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex"}),
             ]),
@@ -154,35 +154,55 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("Количество скважин (шт)"),
-                        dcc.Input(id="input-N_skv", type="number", value=params.get("N_skv", 10), step=1, style=_input_style()),
+                        dcc.Input(id="input-N_skv", type="number", value=params.get("N_skv", 15), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Глубина скважины (м)"),
-                        dcc.Input(id="input-H_skv", type="number", value=params.get("H_skv", 2500), step=100, style=_input_style()),
+                        dcc.Input(id="input-H_skv", type="number", value=params.get("H_skv", 1000), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Диаметр НКТ (мм)"),
-                        dcc.Input(id="input-d_NKT", type="number", value=params.get("d_NKT", 100), step=10, style=_input_style()),
+                        dcc.Input(id="input-d_NKT", type="number", value=params.get("d_NKT", 100), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex", "marginBottom": "12px"}),
                 html.Div([
                     html.Div([
                         _label("Коэффициент a"),
-                        dcc.Input(id="input-a_coef", type="number", value=params.get("a_coef", 0.15), step=0.05, style=_input_style()),
+                        dcc.Input(id="input-a_coef", type="number", value=params.get("a_coef", 0.2), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Коэффициент b"),
-                        dcc.Input(id="input-b_coef", type="number", value=params.get("b_coef", 0.0003), step=0.00005, style=_input_style()),
+                        dcc.Input(id="input-b_coef", type="number", value=params.get("b_coef", 0.00001), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Макс. депрессия (МПа)"),
-                        dcc.Input(id="input-dP_max", type="number", value=params.get("dP_max", 10), step=1, style=_input_style()),
+                        dcc.Input(id="input-dP_max", type="number", value=params.get("dP_max", 0.2), style=_input_style()),
+                    ], style={"flex": 1}),
+                ], style={"display": "flex", "marginBottom": "12px"}),
+                html.Div([
+                    html.Div([
+                        _label("θ (theta)"),
+                        dcc.Input(id="input-theta", type="number", value=params.get("theta", 0.00002776), style=_input_style()),
+                    ], style={"flex": 1, "marginRight": "12px"}),
+                    html.Div([
+                        _label("S"),
+                        dcc.Input(id="input-S_param", type="number", value=params.get("S_param", 0.0606), style=_input_style()),
+                    ], style={"flex": 1, "marginRight": "12px"}),
+                    html.Div([
+                        _label("Мин. устьевое давление (МПа)"),
+                        dcc.Input(id="input-min_p_wellhead", type="number", value=params.get("min_p_wellhead", 0.6), style=_input_style()),
+                    ], style={"flex": 1}),
+                ], style={"display": "flex", "marginBottom": "12px"}),
+                html.Div([
+                    html.Div([
+                        _label("Мин. дебит скв (тыс.м³/сут)"),
+                        dcc.Input(id="input-min_debit_well", type="number", value=params.get("min_debit_well", 7.0), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex", "marginBottom": "12px"}),
                 html.Div([
                     html.Div([
                         _label("Коэффициент эксплуатации"),
-                        dcc.Input(id="input-K_eks", type="number", value=params.get("K_eks", 0.95), step=0.02, style=_input_style()),
+                        dcc.Input(id="input-K_eks", type="number", value=params.get("K_eks", 0.98), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex"}),
             ]),
@@ -213,14 +233,13 @@ def create_input_tab(params, colors, mode="simple"):
                         dcc.Input(
                             id="input-target_recovery_rate",
                             type="number",
-                            value=params.get("target_recovery_rate", 8),
-                            step=0.5,
+                            value=params.get("target_recovery_rate", 5.0),
                             style=_input_style(),
                         ),
                     ], style={"marginBottom": "12px"}),
                     html.Div([
                         _label("Полка вручную (млрд м³/год, 0 = по темпу)"),
-                        dcc.Input(id="input-Q_polka", type="number", value=params.get("Q_polka", 0), step=0.5, style=_input_style()),
+                        dcc.Input(id="input-Q_polka", type="number", value=params.get("Q_polka", 0), style=_input_style()),
                     ], style={"marginBottom": "12px"}),
                 ]),
             ]),
@@ -247,17 +266,21 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("Давление на входе (МПа)"),
-                        dcc.Input(id="input-P_vh_DKS", type="number", value=params.get("P_vh_DKS", 5), step=0.5, style=_input_style()),
+                        dcc.Input(id="input-P_vh_DKS", type="number", value=params.get("P_vh_DKS", 3.0), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Давление на выходе (МПа)"),
-                        dcc.Input(id="input-P_vyh_DKS", type="number", value=params.get("P_vyh_DKS", 7.5), step=0.5, style=_input_style()),
+                        dcc.Input(id="input-P_vyh_DKS", type="number", value=params.get("P_vyh_DKS", 6.0), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Мощность ДКС (МВт)"),
-                        dcc.Input(id="input-N_DKS", type="number", value=params.get("N_DKS", 50), step=10, style=_input_style()),
+                        dcc.Input(id="input-N_DKS", type="number", value=params.get("N_DKS", 12), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex"}),
+                html.Div([
+                    _label("Макс. производительность ДКС (млрд м³/год, 0 = без ограничения)"),
+                    dcc.Input(id="input-Q_max_DKS", type="number", value=params.get("Q_max_DKS", 0), style=_input_style()),
+                ], style={"marginTop": "12px"}),
             ]),
         ], style=_card_style()),
 
@@ -270,15 +293,15 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("Начальный ВГФ (г/м³)"),
-                        dcc.Input(id="input-VGF_nach", type="number", value=params.get("VGF_nach", 0), step=1, style=_input_style()),
+                        dcc.Input(id="input-VGF_nach", type="number", value=params.get("VGF_nach", 0), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Интенсивность роста ВГФ (г/м³)"),
-                        dcc.Input(id="input-dVGF_dG", type="number", value=params.get("dVGF_dG", 10), step=1, style=_input_style()),
+                        dcc.Input(id="input-dVGF_dG", type="number", value=params.get("dVGF_dG", 10), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Критический ВГФ (г/м³)"),
-                        dcc.Input(id="input-VGF_krit", type="number", value=params.get("VGF_krit", 200), step=10, style=_input_style()),
+                        dcc.Input(id="input-VGF_krit", type="number", value=params.get("VGF_krit", 200), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex"}),
             ]),
@@ -293,11 +316,11 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("Год начала разработки"),
-                        dcc.Input(id="input-start_year", type="number", value=params.get("start_year", 2025), step=1, style=_input_style()),
+                        dcc.Input(id="input-start_year", type="number", value=params.get("start_year", 2025), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Горизонт прогноза (лет)"),
-                        dcc.Input(id="input-T_max", type="number", value=params.get("T_max", 35), step=1, style=_input_style()),
+                        dcc.Input(id="input-T_max", type="number", value=params.get("T_max", 50), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex"}),
             ]),

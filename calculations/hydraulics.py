@@ -1,3 +1,5 @@
+import math
+
 from .pvt import PVT
 
 
@@ -49,7 +51,7 @@ class Hydraulics:
             Q_th_m3day ** 2 * T_K * z_sr * H_m / d_NKT_m ** 5
 
         if P_zab ** 2 > term:
-            P_u = np.sqrt(P_zab ** 2 - term)
+            P_u = math.sqrt(P_zab ** 2 - term)
         else:
             P_u = P_zab - 0.001 * H_m * rho_otn
 

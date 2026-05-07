@@ -1,6 +1,3 @@
-import numpy as np
-
-
 class Aquifer:
     """Расчет притока воды из аквифера"""
 

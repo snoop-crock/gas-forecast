@@ -1,4 +1,4 @@
-import numpy as np
+import math
 
 class Inflow:
     """Расчет притока газа к скважине"""
@@ -43,7 +43,7 @@ class Inflow:
         if D <= 0:
             return 0.0
 
-        Q = (-a + np.sqrt(D)) / (2 * b)
+        Q = (-a + math.sqrt(D)) / (2 * b)
 
         return max(0, Q)
 
@@ -63,6 +63,6 @@ class Inflow:
         kh = k * h  # мД·м
         factor = 7.7677e-3  # пересчетный коэффициент
 
-        a = factor * (mu * Z) / kh * (np.log(r_k / r_skv) + skin)
+        a = factor * (mu * Z) / kh * (math.log(r_k / r_skv) + skin)
 
         return a

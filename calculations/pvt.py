@@ -1,4 +1,4 @@
-import numpy as np
+import math
 
 
 class PVT:
@@ -80,7 +80,7 @@ class PVT:
         X = 3.5 + 986 / T_K + 0.01 * M_gas
         Y = 2.4 - 0.2 * X
 
-        mu_1 = K * np.exp(X * (rho_otn ** Y))
+        mu_1 = K * math.exp(X * (rho_otn ** Y))
         mu = mu_1 * (1 + 0.5 * P_pr / (1 + P_pr))
 
         return mu
