@@ -329,7 +329,9 @@ def _check_production_constraints(
     
     # DKS power check if restrictive mode
     if dks_mode == "ограничительный" and n_dks_max > 0:
-        dks_power = DKS.power_calc(test_prod_bcm, p_wh, p_vyh_dks, t_in_dks_k, rho_otn)
+        # Convert test_prod_bcm (млрд м³/месяц) to млн м³/сут for DKS.power_calc
+        test_prod_mln_m3_day = (test_prod_bcm * 1e3) / 30  # млрд м³/месяц → млн м³/сут
+        dks_power = DKS.power_calc(test_prod_mln_m3_day, p_wh, p_vyh_dks, t_in_dks_k, rho_otn)
         if dks_power > n_dks_max:
             return False
     
@@ -477,6 +479,13 @@ def calculate_forecast(params: dict[str, Any]) -> dict[str, Any]:
     initial_max_potential = _initial_potential_rate_bcm_per_year(params, wells_by_year.get(start_year, params["N_skv"]))
     plateau_level = min(initial_plateau_year, initial_max_potential) if initial_plateau_year > 0 else initial_max_potential
 
+    # === THREE-PHASE DKS TRACKING ===
+    dks_phase = "growth"  # "growth" -> "plateau" -> "descent"
+    dks_power_max_achieved = 0.0  # Track maximum DKS power reached
+    p_pl_plateau_start = None  # Pressure when plateau started
+    p_pl_plateau_end_threshold = p_pl_init * 0.3  # Exit plateau when P_пл drops to ~30% of initial
+    p_pl_descent_threshold = p_pl_init * 0.26  # Start descent when P_пл < ~26% of initial
+
     for step in range(horizon_years * 12):
         year = start_year + step // 12
         month = (step % 12) + 1
@@ -524,49 +533,12 @@ def calculate_forecast(params: dict[str, Any]) -> dict[str, Any]:
 
         meets_target = q_monthly_potential >= target_monthly_production and target_monthly_production > 0
         
-        # Use binary search in restrictive DKS mode to find max production within DKS power limit
-        if dks_mode == "ограничительный" and n_dks_max > 0:
-            prod_low = 0.0
-            prod_high = min(q_monthly_potential, target_monthly_production) if target_monthly_production > 0 else q_monthly_potential
-            tolerance = 0.01
-            q_monthly = 0.0
-            
-            while (prod_high - prod_low) > tolerance:
-                prod_mid = (prod_low + prod_high) / 2
-                constraints_ok = _check_production_constraints(
-                    test_prod_bcm=prod_mid,
-                    cum_prod_bcm=q_cum / 1e9,
-                    g_nach_bcm=params["G_nach"],
-                    n_wells=current_wells,
-                    p_pl_init=p_pl_init,
-                    t_pl_k=t_pl,
-                    rho_otn=rho_otn,
-                    a_coef=a_coef,
-                    b_coef=b_coef,
-                    d_p_max=d_p_max,
-                    theta=theta,
-                    s_param=s_param,
-                    vgf_nach=vgf_nach,
-                    dvgf_dg=dvgf_dg,
-                    vgf_krit=vgf_krit,
-                    min_debit_well=min_debit_well,
-                    min_p_wellhead=min_p_wellhead,
-                    dks_mode=dks_mode,
-                    p_vh_dks=p_vh_dks,
-                    p_vyh_dks=p_vyh_dks,
-                    n_dks_max=n_dks_max,
-                    t_in_dks_k=t_in_dks,
-                )
-                if constraints_ok:
-                    prod_low = prod_mid
-                    q_monthly = prod_mid
-                else:
-                    prod_high = prod_mid
+        # Production selection based on DKS mode and phase
+        # Simple approach: use target production in all phases, let DKS constrain if needed
+        if target_monthly_production > 0:
+            q_monthly = min(q_monthly_potential, target_monthly_production)
         else:
-            if target_monthly_production > 0:
-                q_monthly = min(q_monthly_potential, target_monthly_production)
-            else:
-                q_monthly = q_monthly_potential
+            q_monthly = q_monthly_potential
 
         q_total_day = q_monthly * 1e6 / days if days else 0
 
@@ -581,14 +553,54 @@ def calculate_forecast(params: dict[str, Any]) -> dict[str, Any]:
             q_monthly = q_total_day * days / 1e6
 
         if dks_mode == "ограничительный":
+            # === THREE-PHASE DKS LOGIC ===
             if dks_on:
-                q_max_dks = DKS.Q_max_from_power(n_dks_max, P_before_dks, p_vyh_dks, t_in_dks, rho_otn) * 1e6
-                if q_max_dks_day_limit > 0:
-                    q_max_dks = min(q_max_dks, q_max_dks_day_limit) if q_max_dks > 0 else q_max_dks_day_limit
-                if q_max_dks > 0 and q_total_day > q_max_dks:
-                    q_total_day = q_max_dks
-                    q_monthly = q_total_day * days / 1e6
-                n_dks = n_dks_max
+                # Initialize n_dks_current to avoid UnboundLocalError
+                n_dks_current = 0
+                
+                # Check if DKS is needed: Compare well potential to target production
+                dks_needed = q_monthly_potential < target_monthly_production if target_monthly_production > 0 else False
+                
+                if dks_phase == "growth":
+                    # GROWTH phase: DKS not yet needed or just starting
+                    # Transition to PLATEAU when DKS becomes necessary
+                    if dks_needed:
+                        dks_phase = "plateau"
+                        p_pl_plateau_start = p_pl_curr
+                        dks_power_max_achieved = 0.0
+                        n_dks_current = 0  # Will be set to max in PLATEAU phase next month
+                    else:
+                        # Not yet in plateau, DKS power is 0
+                        n_dks_current = 0
+                
+                elif dks_phase == "plateau":
+                    # PLATEAU phase: DKS is active and helping maintain production
+                    # Transition to DESCENT when pressure becomes critical
+                    if p_pl_curr <= p_pl_descent_threshold:
+                        dks_phase = "descent"
+                        n_dks_current = DKS.power_calc(q_total_day / 1e6, P_before_dks, p_vyh_dks, t_in_dks, rho_otn)
+                    else:
+                        # Calculate DKS power at current production
+                        n_dks_current = DKS.power_calc(q_total_day / 1e6, P_before_dks, p_vyh_dks, t_in_dks, rho_otn)
+                        # Set DKS to maximum during plateau (will constrain production if needed)
+                        n_dks_max_plateau = min(n_dks_max, n_dks_current + 1)  # Allow slightly above current to find max
+                        n_dks_current = n_dks_max  # Target is to maintain max DKS power
+                
+                elif dks_phase == "descent":
+                    # DESCENT phase: Pressure too low, both DKS and production decline
+                    n_dks_current = DKS.power_calc(q_total_day / 1e6, P_before_dks, p_vyh_dks, t_in_dks, rho_otn)
+                    n_dks_current = max(0, n_dks_current)
+                
+                n_dks = n_dks_current
+                
+                # Constrain production by DKS power only in PLATEAU phase
+                if dks_phase == "plateau" and n_dks > 0 and p_vyh_dks > P_before_dks + 1e-9:
+                    q_max_dks = DKS.Q_max_from_power(n_dks, P_before_dks, p_vyh_dks, t_in_dks, rho_otn) * 1e6
+                    if q_max_dks_day_limit > 0:
+                        q_max_dks = min(q_max_dks, q_max_dks_day_limit) if q_max_dks > 0 else q_max_dks_day_limit
+                    if q_max_dks > 0 and q_total_day > q_max_dks:
+                        q_total_day = q_max_dks
+                        q_monthly = q_total_day * days / 1e6
             else:
                 n_dks = 0
         else:
@@ -626,6 +638,7 @@ def calculate_forecast(params: dict[str, Any]) -> dict[str, Any]:
                 "Мощность ДКС, МВт": round(n_dks, 3),
                 "На полке": int(meets_target),
                 "Потенциал, млрд м³/мес": round(q_monthly_potential, 4),
+                "DKS_фаза": dks_phase,
             }
         )
 
