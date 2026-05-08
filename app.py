@@ -1214,5 +1214,7 @@ def load_tables_on_mode_change(mode, params):
 #         return current_data + [new_row]
 #     return [{'Год': 2025, 'Темп отбора (%)': 1.5}]
 
+server = app.server
+
 if __name__ == '__main__':
     app.run_server(debug=False)
