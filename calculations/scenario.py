@@ -84,42 +84,21 @@ def validate_forecast_params(params: dict[str, Any]) -> list[str]:
     errors: list[str] = []
 
     validators = [
-        (params.get("P_pl", 0) > 0, "Начальное пластовое давление должно быть > 0"),
-        (params.get("T_pl", 0) > 0, "Пластовая температура должна быть > 0"),
-        (params.get("G_nach", 0) > 0, "Начальные запасы должны быть > 0"),
-        (0 < params.get("rho_otn", 0) < 1, "Относительная плотность газа должна быть между 0 и 1"),
-        (params.get("N_skv", 0) > 0, "Количество скважин должно быть > 0"),
-        (params.get("H_skv", 0) > 0, "Глубина скважин должна быть > 0"),
-        (params.get("T_max", 0) > 0, "Горизонт прогноза должен быть > 0"),
-        (params.get("start_year", 0) > 1900, "Год начала разработки указан некорректно"),
-        (0 < params.get("K_eks", 0) <= 1, "Коэффициент эксплуатации должен быть в диапазоне (0; 1]"),
-        (params.get("d_NKT", 0) > 0, "Диаметр НКТ должен быть > 0"),
-        (params.get("dP_max", 0) > 0, "Максимальная депрессия должна быть > 0"),
-        (params.get("Q_max_DKS", 0) >= 0, "Макс. производительность ДКС не может быть отрицательной"),
+        (params.get("P_pl", 0) > 0, "Начальное пластовое давление > 0"),
+        (params.get("T_pl", 0) > 0, "Пластовая температура > 0"),
+        (params.get("G_nach", 0) > 0, "Начальные запасы > 0"),
+        (0 < params.get("rho_otn", 0) < 1, "Относительная плотность газа (0;1)"),
+        (params.get("N_skv", 0) > 0, "Количество скважин > 0"),
+        (params.get("H_skv", 0) > 0, "Глубина скважин > 0"),
+        (params.get("T_max", 0) > 0, "Горизонт прогноза > 0"),
+        (params.get("start_year", 0) > 1900, "Год начала разработки > 1900"),
+        (0 < params.get("K_eks", 0) <= 1, "Коэффициент эксплуатации (0;1]"),
+        (params.get("d_NKT", 0) > 0, "Диаметр НКТ > 0"),
+        (params.get("dP_max", 0) > 0, "Максимальная депрессия > 0"),
     ]
 
     for is_valid, message in validators:
         if not is_valid:
             errors.append(message)
-
-    schedule_configs = [
-        ("wells_schedule", WELLS_COLUMN, 0, "Сценарий по скважинам"),
-        ("recovery_schedule", RECOVERY_RATE_COLUMN, 0, "Сценарий по темпам отбора"),
-    ]
-
-    for schedule_key, value_column, minimum_value, label in schedule_configs:
-        for row in params.get(schedule_key, []) or []:
-            year = _to_int(row.get(YEAR_COLUMN))
-            value = _to_float(row.get(value_column))
-
-            if year is None:
-                errors.append(f"{label}: у каждой строки должен быть указан год")
-                break
-            if value is None:
-                errors.append(f"{label}: у каждой строки должно быть указано значение")
-                break
-            if value < minimum_value:
-                errors.append(f"{label}: значения не могут быть меньше {minimum_value}")
-                break
 
     return errors

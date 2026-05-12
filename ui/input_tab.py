@@ -47,13 +47,13 @@ def _label(text):
 
 
 def create_input_tab(params, colors, mode="simple"):
-    """Создает вкладку ввода параметров с произвольным вводом чисел."""
+    """Создает вкладку ввода параметров"""
 
     wells_table_data = _build_schedule_data(
         params,
         schedule_key="wells_schedule",
         value_column=WELLS_COLUMN,
-        default_value=params.get("N_skv", 15),
+        default_value=params.get("N_skv", 20),
         cast_type=int,
     )
     recovery_table_data = _build_schedule_data(
@@ -74,7 +74,7 @@ def create_input_tab(params, colors, mode="simple"):
                             style={"fontSize": "16px", "fontWeight": "600", "margin": 0}),
                 ], style={"display": "flex", "alignItems": "center", "marginBottom": "16px"}),
                 html.P(
-                    "Основные параметры считаются по средней скважине. Здесь задается только количество работающих скважин по годам. Последнее заданное значение автоматически переносится на следующие годы до нового изменения.",
+                    "Основные параметры считаются по средней скважине. Здесь задается только количество работающих скважин по годам.",
                     style={"fontSize": "12px", "color": "#666", "marginBottom": "12px"},
                 ),
                 dt.DataTable(
@@ -97,7 +97,7 @@ def create_input_tab(params, colors, mode="simple"):
                             style={"fontSize": "16px", "fontWeight": "600", "margin": 0}),
                 ], style={"display": "flex", "alignItems": "center", "marginBottom": "16px"}),
                 html.P(
-                    "Если целевой годовой темп отбора должен меняться по годам, задай его здесь. Последнее заданное значение автоматически переносится на следующие годы до нового изменения.",
+                    "Если целевой годовой темп отбора должен меняться по годам, задай его здесь.",
                     style={"fontSize": "12px", "color": "#666", "marginBottom": "12px"},
                 ),
                 dt.DataTable(
@@ -116,6 +116,7 @@ def create_input_tab(params, colors, mode="simple"):
         ]
 
     return html.Div([
+        # ==================== ПЛАСТОВЫЕ ПАРАМЕТРЫ ====================
         html.Div([
             html.Div([
                 html.I(className="fas fa-mountain", style={"marginRight": "10px"}),
@@ -125,7 +126,7 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("Начальное пластовое давление (МПа)"),
-                        dcc.Input(id="input-P_pl", type="number", value=params.get("P_pl", 10), style=_input_style()),
+                        dcc.Input(id="input-P_pl", type="number", value=params.get("P_pl", 25.0), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Пластовая температура (°C)"),
@@ -145,6 +146,7 @@ def create_input_tab(params, colors, mode="simple"):
             ]),
         ], style=_card_style()),
 
+        # ==================== ПАРАМЕТРЫ СКВАЖИНЫ ====================
         html.Div([
             html.Div([
                 html.I(className="fas fa-oil-can", style={"marginRight": "10px"}),
@@ -154,7 +156,7 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("Количество скважин (шт)"),
-                        dcc.Input(id="input-N_skv", type="number", value=params.get("N_skv", 15), style=_input_style()),
+                        dcc.Input(id="input-N_skv", type="number", value=params.get("N_skv", 20), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("Глубина скважины (м)"),
@@ -182,7 +184,7 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("θ (theta)"),
-                        dcc.Input(id="input-theta", type="number", value=params.get("theta", 0.00002776), style=_input_style()),
+                        dcc.Input(id="input-theta", type="number", value=params.get("theta", 0.00003), style=_input_style()),
                     ], style={"flex": 1, "marginRight": "12px"}),
                     html.Div([
                         _label("S"),
@@ -196,7 +198,7 @@ def create_input_tab(params, colors, mode="simple"):
                 html.Div([
                     html.Div([
                         _label("Мин. дебит скв (тыс.м³/сут)"),
-                        dcc.Input(id="input-min_debit_well", type="number", value=params.get("min_debit_well", 7.0), style=_input_style()),
+                        dcc.Input(id="input-min_debit_well", type="number", value=params.get("min_debit_well", 5.0), style=_input_style()),
                     ], style={"flex": 1}),
                 ], style={"display": "flex", "marginBottom": "12px"}),
                 html.Div([
@@ -208,6 +210,7 @@ def create_input_tab(params, colors, mode="simple"):
             ]),
         ], style=_card_style()),
 
+        # ==================== ПАРАМЕТРЫ ПРОГНОЗА ====================
         html.Div([
             html.Div([
                 html.I(className="fas fa-chart-line", style={"marginRight": "10px"}),
@@ -215,36 +218,22 @@ def create_input_tab(params, colors, mode="simple"):
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "16px"}),
             html.Div([
                 html.Div([
-                    _label("Режим полки"),
-                    dcc.RadioItems(
-                        id="input-plateau_mode",
-                        options=[
-                            {"label": " Максимально длинная полка", "value": "auto"},
-                            {"label": " Заданный темп отбора", "value": "manual"},
-                        ],
-                        value=params.get("plateau_mode", "auto"),
-                        inline=False,
-                        style={"marginBottom": "12px"},
+                    _label("Целевой темп отбора (% в год)"),
+                    dcc.Input(
+                        id="input-target_recovery_rate",
+                        type="number",
+                        value=params.get("target_recovery_rate", 5.0),
+                        style=_input_style(),
                     ),
-                ]),
+                ], style={"marginBottom": "12px"}),
                 html.Div([
-                    html.Div([
-                        _label("Целевой темп отбора (% в год)"),
-                        dcc.Input(
-                            id="input-target_recovery_rate",
-                            type="number",
-                            value=params.get("target_recovery_rate", 5.0),
-                            style=_input_style(),
-                        ),
-                    ], style={"marginBottom": "12px"}),
-                    html.Div([
-                        _label("Полка вручную (млрд м³/год, 0 = по темпу)"),
-                        dcc.Input(id="input-Q_polka", type="number", value=params.get("Q_polka", 0), style=_input_style()),
-                    ], style={"marginBottom": "12px"}),
-                ]),
+                    _label("Полка вручную (млрд м³/год, 0 = по темпу)"),
+                    dcc.Input(id="input-Q_polka", type="number", value=params.get("Q_polka", 0), style=_input_style()),
+                ], style={"marginBottom": "12px"}),
             ]),
         ], style=_card_style()),
 
+        # ==================== ДКС ====================
         html.Div([
             html.Div([
                 html.I(className="fas fa-industry", style={"marginRight": "10px"}),
@@ -252,38 +241,25 @@ def create_input_tab(params, colors, mode="simple"):
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "16px"}),
             html.Div([
                 html.Div([
-                    _label("Режим работы ДКС"),
-                    dcc.Dropdown(
-                        id="input-DKS_mode",
-                        options=[
-                            {"label": "Расчетный", "value": "расчетный"},
-                            {"label": "Ограничительный", "value": "ограничительный"},
-                        ],
-                        value=params.get("DKS_mode", "расчетный"),
-                        style={"width": "100%", "border": "1px solid #e2e8f0", "borderRadius": "8px"},
-                    ),
+                    _label("Давление на входе (МПа)"),
+                    dcc.Input(id="input-P_vh_DKS", type="number", value=params.get("P_vh_DKS", 3.0), style=_input_style()),
                 ], style={"marginBottom": "12px"}),
                 html.Div([
-                    html.Div([
-                        _label("Давление на входе (МПа)"),
-                        dcc.Input(id="input-P_vh_DKS", type="number", value=params.get("P_vh_DKS", 3.0), style=_input_style()),
-                    ], style={"flex": 1, "marginRight": "12px"}),
-                    html.Div([
-                        _label("Давление на выходе (МПа)"),
-                        dcc.Input(id="input-P_vyh_DKS", type="number", value=params.get("P_vyh_DKS", 6.0), style=_input_style()),
-                    ], style={"flex": 1, "marginRight": "12px"}),
-                    html.Div([
-                        _label("Мощность ДКС (МВт)"),
-                        dcc.Input(id="input-N_DKS", type="number", value=params.get("N_DKS", 12), style=_input_style()),
-                    ], style={"flex": 1}),
-                ], style={"display": "flex"}),
+                    _label("Давление на выходе (МПа)"),
+                    dcc.Input(id="input-P_vyh_DKS", type="number", value=params.get("P_vyh_DKS", 5.5), style=_input_style()),
+                ], style={"marginBottom": "12px"}),
                 html.Div([
-                    _label("Макс. производительность ДКС (млрд м³/год, 0 = без ограничения)"),
-                    dcc.Input(id="input-Q_max_DKS", type="number", value=params.get("Q_max_DKS", 0), style=_input_style()),
-                ], style={"marginTop": "12px"}),
+                    _label("Мощность ДКС (МВт)"),
+                    dcc.Input(id="input-N_DKS", type="number", value=params.get("N_DKS", 12), style=_input_style()),
+                ], style={"marginBottom": "12px"}),
+                html.Div([
+                    _label("Температура на входе (°C)"),
+                    dcc.Input(id="input-t_inlet", type="number", value=params.get("t_inlet", 10.0), style=_input_style()),
+                ], style={"marginBottom": "12px"}),
             ]),
         ], style=_card_style()),
 
+        # ==================== ОБВОДНЕНИЕ ====================
         html.Div([
             html.Div([
                 html.I(className="fas fa-water", style={"marginRight": "10px"}),
@@ -291,22 +267,21 @@ def create_input_tab(params, colors, mode="simple"):
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "16px"}),
             html.Div([
                 html.Div([
-                    html.Div([
-                        _label("Начальный ВГФ (г/м³)"),
-                        dcc.Input(id="input-VGF_nach", type="number", value=params.get("VGF_nach", 0), style=_input_style()),
-                    ], style={"flex": 1, "marginRight": "12px"}),
-                    html.Div([
-                        _label("Интенсивность роста ВГФ (г/м³)"),
-                        dcc.Input(id="input-dVGF_dG", type="number", value=params.get("dVGF_dG", 10), style=_input_style()),
-                    ], style={"flex": 1, "marginRight": "12px"}),
-                    html.Div([
-                        _label("Критический ВГФ (г/м³)"),
-                        dcc.Input(id="input-VGF_krit", type="number", value=params.get("VGF_krit", 200), style=_input_style()),
-                    ], style={"flex": 1}),
-                ], style={"display": "flex"}),
+                    _label("Начальный ВГФ (г/м³)"),
+                    dcc.Input(id="input-VGF_nach", type="number", value=params.get("VGF_nach", 0), step=1, style=_input_style()),
+                ], style={"marginBottom": "12px"}),
+                html.Div([
+                    _label("Интенсивность роста ВГФ (г/м³)"),
+                    dcc.Input(id="input-dVGF_dG", type="number", value=params.get("dVGF_dG", 0), step=1, style=_input_style()),
+                ], style={"marginBottom": "12px"}),
+                html.Div([
+                    _label("Критический ВГФ (г/м³)"),
+                    dcc.Input(id="input-VGF_krit", type="number", value=params.get("VGF_krit", 200), step=10, style=_input_style()),
+                ], style={"marginBottom": "12px"}),
             ]),
         ], style=_card_style()),
 
+        # ==================== ВРЕМЕННЫЕ ПАРАМЕТРЫ ====================
         html.Div([
             html.Div([
                 html.I(className="fas fa-calendar", style={"marginRight": "10px"}),
@@ -314,15 +289,13 @@ def create_input_tab(params, colors, mode="simple"):
             ], style={"display": "flex", "alignItems": "center", "marginBottom": "16px"}),
             html.Div([
                 html.Div([
-                    html.Div([
-                        _label("Год начала разработки"),
-                        dcc.Input(id="input-start_year", type="number", value=params.get("start_year", 2025), style=_input_style()),
-                    ], style={"flex": 1, "marginRight": "12px"}),
-                    html.Div([
-                        _label("Горизонт прогноза (лет)"),
-                        dcc.Input(id="input-T_max", type="number", value=params.get("T_max", 50), style=_input_style()),
-                    ], style={"flex": 1}),
-                ], style={"display": "flex"}),
+                    _label("Год начала разработки"),
+                    dcc.Input(id="input-start_year", type="number", value=params.get("start_year", 2025), style=_input_style()),
+                ], style={"marginBottom": "12px"}),
+                html.Div([
+                    _label("Горизонт прогноза (лет)"),
+                    dcc.Input(id="input-T_max", type="number", value=params.get("T_max", 50), style=_input_style()),
+                ], style={"marginBottom": "12px"}),
             ]),
         ], style=_card_style()),
 

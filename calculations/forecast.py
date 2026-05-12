@@ -5,50 +5,54 @@ import math
 from typing import Any
 
 from .dcs import DKS
-from .hydraulics import Hydraulics
-from .inflow import Inflow
-from .material_balance import MaterialBalance
 from .pvt import PVT
 from .scenario import (
     RECOVERY_RATE_COLUMN,
     WELLS_COLUMN,
-    build_yearly_schedule,
     schedule_to_year_map,
 )
-from .water_influx import WaterInflux
 
+
+# ============================================================================
+# ПАРАМЕТРЫ ПО УМОЛЧАНИЮ (ДЕФОЛТНЫЕ ЗНАЧЕНИЯ)
+# ============================================================================
 
 default_params = {
     "start_year": 2025,
-    "T_max": 60,
-    "Q_polka": 0,
-    "plateau_mode": "auto",
-    "target_recovery_rate": 1.5,
-    "P_pl": 25,
-    "T_pl": 80,
+    "T_max": 50,
+    "plateau_mode": "manual",              # только ручной режим
+    "target_recovery_rate": 5.0,          # 5% отбор = 5 млрд м³/год
+    
+    # Пластовые параметры
+    "P_pl": 25.0,                         # 250 бар
+    "T_pl": 50,
     "G_nach": 100,
-    "rho_otn": 0.6,
-    "N_skv": 10,
-    "H_skv": 2500,
+    "rho_otn": 0.56,
+    
+    # Параметры скважины
+    "N_skv": 20,
+    "H_skv": 1000,
     "d_NKT": 100,
-    "a_coef": 0.15,
-    "b_coef": 0.0003,
+    "a_coef": 0.2,
+    "b_coef": 0.00001,
     "theta": 0.00003,
     "S_param": 0.0606,
-    "min_debit_well": 0.0,
-    "min_p_wellhead": 0.0,
-    "dP_max": 10,
-    "K_eks": 0.9,
-    "DKS_mode": "расчетный",
-    "P_vh_DKS": 5,
-    "P_vyh_DKS": 7.5,
-    "N_DKS": 50,
+    "min_debit_well": 5.0,
+    "min_p_wellhead": 0.6,                # 6 бар
+    
+    # ДКС (только ограничительный режим)
+    "DKS_mode": "ограничительный",         # всегда ограничительный
+    "P_vh_DKS": 3.0,
+    "P_vyh_DKS": 5.5,                     # 55 бар
+    "N_DKS": 12,                          # максимальная мощность ДКС (МВт)
+    "t_inlet": 10.0,
     "Q_max_DKS": 0,
-    "T_in_DKS": 0,
+    
+    # Обводнение (отключено)
     "VGF_nach": 0,
-    "dVGF_dG": 10,
+    "dVGF_dG": 0,
     "VGF_krit": 200,
-    "opt_water": 1,
+    "opt_water": 0,
     "opt_friction": 1,
     "pvt_method": "latonov",
     "wells_schedule": [],
@@ -57,664 +61,365 @@ default_params = {
 }
 
 
-def _max_well_rate_thousand_m3day(
-    p_pl: float,
-    p_u_min: float,
-    a_coef: float,
-    b_coef: float,
-    d_p_max: float,
-    h_skv: float,
-    rho_otn: float,
-    t_pl: float,
-    d_nkt: float,
-    vgf: float,
-    vgf_krit: float,
-    opt_friction: int,
-) -> tuple[float, float, float]:
-    """
-    Returns (q_well_thousand_m3day, p_zab, p_u).
-    Constraint: p_pl - p_zab <= d_p_max and p_u >= p_u_min.
-    """
-    p_pl = float(p_pl)
-    p_u_min = float(p_u_min)
-
-    if p_pl <= 0.5:
-        return 0.0, max(0.5, p_pl), max(0.1, p_pl)
-
-    p_zab_min = max(0.5, p_pl - float(d_p_max))
-    p_zab_max = p_pl
-
-    # If even at p_zab=p_pl (zero inflow) the wellhead pressure is below requirement -> infeasible.
-    p_u_at_max = Hydraulics.P_u_from_P_zab(p_zab_max, 0, h_skv, rho_otn, t_pl, d_nkt) if opt_friction == 1 else max(0.5, p_zab_max - 0.001 * h_skv * rho_otn)
-    if p_u_at_max < p_u_min:
-        return 0.0, p_zab_max, p_u_at_max
-
-    best_q = 0.0
-    best_p_zab = p_zab_max
-    best_p_u = p_u_at_max
-
-    low = p_zab_min
-    high = p_zab_max
-    for _ in range(30):
-        mid = (low + high) / 2
-
-        q = Inflow.Q_gas(p_pl, mid, a_coef, b_coef)
-        q *= WaterInflux.rel_perm_gas(vgf, vgf_krit)
-
-        if opt_friction == 1:
-            p_u = Hydraulics.P_u_from_P_zab(mid, q, h_skv, rho_otn, t_pl, d_nkt)
-        else:
-            p_u = max(0.5, mid - 0.001 * h_skv * rho_otn)
-
-        if p_u >= p_u_min:
-            # Can try lower p_zab -> higher q (while keeping p_u >= min)
-            best_q = q
-            best_p_zab = mid
-            best_p_u = p_u
-            high = mid
-        else:
-            low = mid
-
-    return float(best_q), float(best_p_zab), float(best_p_u)
+def _to_kelvin(temp_c: float) -> float:
+    return temp_c + 273.15
 
 
-def _wellhead_pressure_mpa(p_wf_mpa: float, q_thousand_m3day: float, theta: float, s_param: float) -> float:
-    """
-    VBA reference:
-        Pwh(bar)^2 = ((Pwf(bar)^2 - theta*Q^2) / exp(2*S))
-    Here pressures are in MPa, so bar = 10*MPa:
-        Pwh(MPa)^2 = ((Pwf(MPa)^2 - (theta/100)*Q^2) / exp(2*S))
-    """
-    p_wf_mpa = float(p_wf_mpa)
-    q_thousand_m3day = float(q_thousand_m3day)
-    theta = float(theta)
-    s_param = float(s_param)
+def _get_days_in_month(year: int, month: int) -> int:
+    days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    days = days_in_month[month - 1]
+    if month == 2 and (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)):
+        return 29
+    return days
 
-    expr = (p_wf_mpa ** 2) - (theta / 100.0) * (q_thousand_m3day ** 2)
-    if expr <= 0:
+
+# ============================================================================
+# ОСНОВНЫЕ РАСЧЁТНЫЕ ФУНКЦИИ
+# ============================================================================
+
+def calc_z_factor(pressure_bar: float, temp_c: float, gas_gravity: float) -> float:
+    """Расчёт Z-фактора по методике коллеги"""
+    T_K = temp_c + 273.15
+    P_MPa = pressure_bar * 0.1
+    Ppc = 4.604 + 0.35 * gas_gravity
+    Tpc = 92.2 + 175.5 * gas_gravity
+    
+    Ppr = P_MPa / Ppc if Ppc > 0 else 1.0
+    Tpr = T_K / Tpc if Tpc > 0 else 1.0
+    
+    z = 1 - (3.52 * Ppr) / (10 ** (0.9813 * Tpr)) + (0.274 * Ppr * Ppr) / (10 ** (0.8157 * Tpr))
+    
+    if z < 0.6:
+        z = 0.6
+    if z > 1.2:
+        z = 1.2
+    return z
+
+
+def calc_z_inlet(p_inlet_mpa: float, t_inlet_c: float, gas_gravity: float) -> float:
+    """Расчёт Z-фактора на входе ДКС"""
+    Tpr_in = ((9 / 5) * (t_inlet_c + 273.15)) / (168 + 325 * gas_gravity - 12.5 * gas_gravity * gas_gravity)
+    P_psi_in = p_inlet_mpa * 10 * 14.50377
+    Ppc_in = 677 + 15 * gas_gravity - 37.5 * gas_gravity * gas_gravity
+    Ppr_in = P_psi_in / Ppc_in if Ppc_in > 0 else 1.0
+    
+    A = 1.39 * math.sqrt(max(Tpr_in - 0.92, 0.0001)) - 0.36 * Tpr_in - 0.101
+    B = 0.62 - 0.23 * Tpr_in
+    C = 0.066 / max(Tpr_in - 0.86, 0.0001) - 0.037
+    D = 0.32
+    E = 9 * (Tpr_in - 1)
+    F = 0.132 - 0.32 * math.log10(Tpr_in)
+    G = 10 ** (0.3106 - 0.49 * Tpr_in + 0.1824 * Tpr_in * Tpr_in)
+    
+    ExpVal = B * Ppr_in + C * Ppr_in * Ppr_in + (D * (Ppr_in ** 6)) / (10 ** E)
+    
+    z = A + (1 - A) / math.exp(ExpVal) + F * (Ppr_in ** G)
+    return max(0.6, min(z, 1.2))
+
+
+def calc_debit_from_depression(p_res_bar: float, depression_bar: float,
+                                a_coef: float, b_coef: float) -> float:
+    """Расчёт дебита по депрессии (тыс.м³/сут на скважину)"""
+    p_wf_bar = max(0.1, p_res_bar - depression_bar)
+    dP2 = p_res_bar ** 2 - p_wf_bar ** 2
+    
+    if dP2 <= 0:
         return 0.0
-    return (expr / math.exp(2.0 * s_param)) ** 0.5
-
-
-def _max_well_rate_with_wellhead_constraints_thousand_m3day(
-    p_pl: float,
-    a_coef: float,
-    b_coef: float,
-    d_p_max: float,
-    theta: float,
-    s_param: float,
-    min_p_wellhead: float,
-    min_debit_well: float,
-) -> tuple[float, float, float]:
-    """
-    Returns (q_well_thousand_m3day, p_wf_mpa, p_wellhead_mpa) under constraints:
-      - p_pl - p_wf <= dP_max
-      - p_wellhead >= min_p_wellhead (via theta/S transform)
-      - q_well >= min_debit_well (if > 0)
-    """
-    p_pl = float(p_pl)
-    min_p_wellhead = float(min_p_wellhead)
-    min_debit_well = float(min_debit_well)
-
-    if p_pl <= 0.5:
-        return 0.0, max(0.5, p_pl), 0.0
-
-    p_wf_min = max(0.5, p_pl - float(d_p_max))
-    p_wf_max = p_pl
-
-    def feasible(p_wf: float) -> tuple[bool, float, float]:
-        q = Inflow.Q_gas(p_pl, p_wf, a_coef, b_coef)
-        p_wh = _wellhead_pressure_mpa(p_wf, q, theta, s_param)
-        ok = True
-        if min_debit_well > 0 and q < min_debit_well:
-            ok = False
-        if min_p_wellhead > 0 and p_wh < min_p_wellhead:
-            ok = False
-        return ok, q, p_wh
-
-    ok_at_max, _, _ = feasible(p_wf_max)
-    if not ok_at_max:
-        return 0.0, p_wf_max, 0.0
-
-    best_q = 0.0
-    best_p_wf = p_wf_max
-    best_p_wh = 0.0
-
-    low = p_wf_min
-    high = p_wf_max
-    for _ in range(40):
-        mid = (low + high) / 2
-        ok, q, p_wh = feasible(mid)
-        if ok:
-            best_q, best_p_wf, best_p_wh = q, mid, p_wh
-            high = mid
-        else:
-            low = mid
-
-    return float(best_q), float(best_p_wf), float(best_p_wh)
-
-def _initial_potential_rate_bcm_per_year(params: dict[str, Any], wells_count: int | None = None) -> float:
-    p_pl = params["P_pl"]
-    d_p_max = params["dP_max"]
-    p_zab_max = max(0.5, p_pl - d_p_max)
-    q_skv_day = Inflow.Q_gas(p_pl, p_zab_max, params["a_coef"], params["b_coef"])
-    wells = wells_count if wells_count is not None else params["N_skv"]
-    return q_skv_day * wells * params["K_eks"] * 365 / 1e6
-
-
-def _annual_target_bcm(
-    year: int,
-    params: dict[str, Any],
-    default_rate: float,
-    recovery_by_year: dict[int, float],
-) -> float:
-    if recovery_by_year:
-        recovery_rate = recovery_by_year.get(year, default_rate)
-        return (recovery_rate / 100) * params["G_nach"]
-
-    if params["Q_polka"] and params["Q_polka"] > 0:
-        return params["Q_polka"]
-
-    return (default_rate / 100) * params["G_nach"]
-
-
-def _scenario_maps(params: dict[str, Any]) -> tuple[dict[int, int], dict[int, float]]:
-    start_year = int(params["start_year"])
-    horizon = int(params["T_max"])
-    wells_by_year = schedule_to_year_map(
-        raw_schedule=params.get("wells_schedule"),
-        start_year=start_year,
-        horizon_years=horizon,
-        default_value=params["N_skv"],
-        value_column=WELLS_COLUMN,
-        minimum_value=0,
-        cast_type=int,
-    )
-    recovery_by_year = schedule_to_year_map(
-        raw_schedule=params.get("recovery_schedule"),
-        start_year=start_year,
-        horizon_years=horizon,
-        default_value=params["target_recovery_rate"],
-        value_column=RECOVERY_RATE_COLUMN,
-        minimum_value=0,
-        cast_type=float,
-    )
-    return wells_by_year, recovery_by_year
-
-
-def _build_output_schedules(params: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    wells_schedule = build_yearly_schedule(
-        start_year=params["start_year"],
-        horizon_years=params["T_max"],
-        default_value=params["N_skv"],
-        value_column=WELLS_COLUMN,
-        raw_schedule=params.get("wells_schedule"),
-        minimum_value=0,
-        cast_type=int,
-    )
-    recovery_schedule = build_yearly_schedule(
-        start_year=params["start_year"],
-        horizon_years=params["T_max"],
-        default_value=params["target_recovery_rate"],
-        value_column=RECOVERY_RATE_COLUMN,
-        raw_schedule=params.get("recovery_schedule"),
-        minimum_value=0,
-        cast_type=float,
-    )
-    return wells_schedule, recovery_schedule
-
-
-def _check_production_constraints(
-    test_prod_bcm: float,
-    cum_prod_bcm: float,
-    g_nach_bcm: float,
-    n_wells: int,
-    p_pl_init: float,
-    t_pl_k: float,
-    rho_otn: float,
-    a_coef: float,
-    b_coef: float,
-    d_p_max: float,
-    theta: float,
-    s_param: float,
-    vgf_nach: float,
-    dvgf_dg: float,
-    vgf_krit: float,
-    min_debit_well: float,
-    min_p_wellhead: float,
-    dks_mode: str,
-    p_vh_dks: float,
-    p_vyh_dks: float,
-    n_dks_max: float,
-    t_in_dks_k: float,
-) -> bool:
-    """Check if production meets all constraints (like VBA CheckConstraints)"""
-    if n_wells <= 0:
-        return False
     
-    g_nach = g_nach_bcm * 1e9
-    cum_prod = cum_prod_bcm * 1e9
-    test_prod = test_prod_bcm * 1e9
+    if b_coef == 0:
+        return dP2 / a_coef if a_coef > 0 else 0.0
     
-    temp_remaining = g_nach - (cum_prod + test_prod)
-    if temp_remaining < 0:
-        return False
+    D = a_coef ** 2 + 4 * b_coef * dP2
+    if D <= 0:
+        return 0.0
     
-    # Calc wellhead pressure for this production level
-    debit_per_well_thousand = (test_prod_bcm * 1e6) / n_wells / 365
-    vgf = WaterInflux.VGF_from_cumulative(vgf_nach, dvgf_dg, cum_prod + test_prod, g_nach, vgf_krit)
-    
-    # Reservoir pressure with iterations
-    p_pl_curr = p_pl_init * (temp_remaining / g_nach_bcm)
-    for _ in range(20):
-        z_f = PVT.z_factor(p_pl_curr, t_pl_k, rho_otn)
-        p_over_z = PVT.z_factor(p_pl_init, t_pl_k, rho_otn)
-        if p_over_z > 0:
-            p_pl_curr = (p_pl_init / p_over_z) * z_f * (temp_remaining / g_nach_bcm)
-        if p_pl_curr < 0:
-            return False
-    
-    # Inflow pressure with water
-    p_zab_max = max(0.5, p_pl_curr - d_p_max)
-    q_skv = Inflow.Q_gas(p_pl_curr, p_zab_max, a_coef, b_coef)
-    q_skv *= WaterInflux.rel_perm_gas(vgf, vgf_krit)
-    
-    if q_skv < min_debit_well:
-        return False
-    
-    # Wellhead pressure via theta/S
-    p_wh = _wellhead_pressure_mpa(p_zab_max, q_skv, theta, s_param)
-    if p_wh < min_p_wellhead:
-        return False
-    
-    # DKS power check if restrictive mode
-    if dks_mode == "ограничительный" and n_dks_max > 0:
-        # Convert test_prod_bcm (млрд м³/месяц) to млн м³/сут for DKS.power_calc
-        test_prod_mln_m3_day = (test_prod_bcm * 1e3) / 30  # млрд м³/месяц → млн м³/сут
-        dks_power = DKS.power_calc(test_prod_mln_m3_day, p_wh, p_vyh_dks, t_in_dks_k, rho_otn)
-        if dks_power > n_dks_max:
-            return False
-    
-    return True
+    return (-a_coef + math.sqrt(D)) / (2 * b_coef)
 
 
-def find_optimal_recovery_rate(params: dict[str, Any], max_years: int = 30) -> tuple[int, int]:
-    g_nach = params["G_nach"] * 1e9
-    p_pl_init = params["P_pl"]
-    t_pl = params["T_pl"] + 273.15
-    rho_otn = params["rho_otn"]
-    n_skv = params["N_skv"]
-    k_eks = params["K_eks"]
+def calc_wellhead_pressure(p_wf_bar: float, q_day_thousand: float,
+                           theta: float, s_param: float) -> float:
+    """Расчёт устьевого давления (бар)"""
+    if p_wf_bar <= 0 or q_day_thousand <= 0:
+        return 6.0
+    
+    term = theta * (q_day_thousand ** 2)
+    if p_wf_bar ** 2 <= term:
+        return 6.0
+    
+    expr = (p_wf_bar ** 2 - term) / math.exp(2 * s_param)
+    if expr <= 0:
+        return 6.0
+    
+    return math.sqrt(expr)
+
+
+def calc_dks_power(q_mm3day: float, p_inlet_mpa: float, p_out_mpa: float,
+                   t_inlet_c: float, gas_gravity: float) -> float:
+    """Расчёт мощности ДКС (МВт)"""
+    if q_mm3day <= 0 or p_inlet_mpa <= 0.01:
+        return 0.0
+    
+    z_in = calc_z_inlet(p_inlet_mpa, t_inlet_c, gas_gravity)
+    ratio = p_out_mpa / p_inlet_mpa
+    if ratio <= 1:
+        return 0.0
+    
+    T_abs = t_inlet_c + 273.15
+    power = 2.04 * z_in * T_abs * (ratio - 1) * (q_mm3day / 800)
+    return max(0.0, power)
+
+
+def compute_year(test_prod_mcm: float, cum_prod_mcm: float, params: dict[str, Any],
+                 n_wells: int, max_depress_bar: float, pmg_bar: float,
+                 max_dks_mw: float, enforce: bool) -> dict[str, Any]:
+    """Расчёт для одного года"""
+    result = {
+        "ok": True,
+        "debit": 0.0,
+        "pRes": 0.0,
+        "pWf": 0.0,
+        "depr": 0.0,
+        "pWh": 0.0,
+        "pIn": 0.0,
+        "dks": 0.0,
+    }
+    
+    g_nach_mcm = params["G_nach"] * 1000
     a_coef = params["a_coef"]
     b_coef = params["b_coef"]
-    d_p_max = params["dP_max"]
-    theta = float(params.get("theta", 0) or 0)
-    s_param = float(params.get("S_param", 0) or 0)
-    min_debit_well = float(params.get("min_debit_well", 0) or 0)
-    min_p_wellhead = float(params.get("min_p_wellhead", 0) or 0)
-    vgf_nach = params.get("VGF_nach", 0)
-    dvgf_dg = params.get("dVGF_dG", 10)
-    vgf_krit = params.get("VGF_krit", 200)
-    dks_mode = params.get("DKS_mode", "расчетный")
-    p_vh_dks = params.get("P_vh_DKS", 5)
-    p_vyh_dks = params.get("P_vyh_DKS", 7.5)
-    n_dks_max = params.get("N_DKS", 50)
-    t_in_dks = float(params.get("T_in_DKS", params["T_pl"]) or params["T_pl"]) + 273.15
-
-    best_rate = 1
-    best_years = 0
-
-    for rate in range(1, 21):
-        annual_target_bcm = (rate / 100) * params["G_nach"]
-        q_cum = 0.0
-        years_on_target = 0
-
-        for year in range(1, max_years + 1):
-            year_ok = True
-            
-            # Binary search for achievable monthly production
-            prod_low = 0.0
-            prod_high = annual_target_bcm / 12
-            tolerance = 0.01
-            achievable_prod = 0.0
-            
-            while (prod_high - prod_low) > tolerance:
-                prod_mid = (prod_low + prod_high) / 2
-                constraints_ok = _check_production_constraints(
-                    test_prod_bcm=prod_mid,
-                    cum_prod_bcm=q_cum / 1e9,
-                    g_nach_bcm=params["G_nach"],
-                    n_wells=n_skv,
-                    p_pl_init=p_pl_init,
-                    t_pl_k=t_pl,
-                    rho_otn=rho_otn,
-                    a_coef=a_coef,
-                    b_coef=b_coef,
-                    d_p_max=d_p_max,
-                    theta=theta,
-                    s_param=s_param,
-                    vgf_nach=vgf_nach,
-                    dvgf_dg=dvgf_dg,
-                    vgf_krit=vgf_krit,
-                    min_debit_well=min_debit_well,
-                    min_p_wellhead=min_p_wellhead,
-                    dks_mode=dks_mode,
-                    p_vh_dks=p_vh_dks,
-                    p_vyh_dks=p_vyh_dks,
-                    n_dks_max=n_dks_max,
-                    t_in_dks_k=t_in_dks,
-                )
-                
-                if constraints_ok:
-                    prod_low = prod_mid
-                    achievable_prod = prod_mid
-                else:
-                    prod_high = prod_mid
-            
-            if achievable_prod < (annual_target_bcm / 12 * 0.98):
-                year_ok = False
-            
-            if year_ok:
-                q_cum += achievable_prod * 1e9
-                years_on_target = year
-            else:
-                break
-
-        if years_on_target > best_years:
-            best_years = years_on_target
-            best_rate = rate
-
-    return best_rate, best_years
+    p_pl_init_bar = params["P_pl"] * 10
+    t_pl_c = params["T_pl"]
+    rho_otn = params["rho_otn"]
+    theta = params["theta"]
+    s_param = params["S_param"]
+    min_p_wh_bar = params["min_p_wellhead"] * 10
+    min_debit_well = params["min_debit_well"]
+    t_inlet_c = params.get("t_inlet", 10.0)
+    
+    debit = (test_prod_mcm / n_wells / 365) * 1000 if n_wells > 0 else 0
+    result["debit"] = debit
+    
+    temp_remaining = g_nach_mcm - (cum_prod_mcm + test_prod_mcm)
+    if temp_remaining < 0:
+        result["ok"] = False
+        return result
+    
+    # Расчёт пластового давления
+    z_initial = calc_z_factor(p_pl_init_bar, t_pl_c, rho_otn)
+    p_res_bar = p_pl_init_bar * (temp_remaining / g_nach_mcm)
+    
+    for _ in range(20):
+        z_f = calc_z_factor(p_res_bar, t_pl_c, rho_otn)
+        p_over_z = (p_pl_init_bar / z_initial) * (temp_remaining / g_nach_mcm)
+        p_res_bar = p_over_z * z_f
+        if p_res_bar < 0:
+            result["ok"] = False
+            return result
+    
+    result["pRes"] = p_res_bar
+    
+    # Забойное давление
+    expr = p_res_bar ** 2 - a_coef * debit - b_coef * (debit ** 2)
+    if expr <= 0:
+        result["ok"] = False
+        return result
+    
+    p_wf_bar = math.sqrt(expr)
+    depr = max(0.0, p_res_bar - p_wf_bar)
+    result["pWf"] = p_wf_bar
+    result["depr"] = depr
+    
+    if enforce and depr > max_depress_bar:
+        result["ok"] = False
+        return result
+    
+    # Устьевое давление
+    p_wh_bar = calc_wellhead_pressure(p_wf_bar, debit, theta, s_param)
+    result["pWh"] = p_wh_bar
+    
+    if enforce and p_wh_bar < min_p_wh_bar:
+        result["ok"] = False
+        return result
+    
+    # Давление на входе ДКС
+    p_inlet_mpa = p_wh_bar / 10
+    result["pIn"] = p_inlet_mpa
+    
+    # Мощность ДКС (всегда считаем для ограничительного режима)
+    dks_power = 0.0
+    if p_inlet_mpa > 0.01 and pmg_bar > 0:
+        q_mm3day = test_prod_mcm / 365
+        dks_power = calc_dks_power(q_mm3day, p_inlet_mpa, pmg_bar / 10, t_inlet_c, rho_otn)
+    
+    if enforce and max_dks_mw > 0 and dks_power > max_dks_mw:
+        result["ok"] = False
+        return result
+    
+    result["dks"] = dks_power
+    
+    if enforce and n_wells > 0 and debit < min_debit_well:
+        result["ok"] = False
+        return result
+    
+    return result
 
 
 def calculate_forecast(params: dict[str, Any]) -> dict[str, Any]:
+    """Расчёт прогноза добычи газа"""
+    
     params = {**default_params, **params}
-    wells_by_year, recovery_by_year = _scenario_maps(params)
-
-    plateau_mode = params.get("plateau_mode", "auto")
-    actual_recovery_rate = float(params.get("target_recovery_rate", default_params["target_recovery_rate"]))
-    warning_message = None
-
-    if plateau_mode == "auto":
-        optimal_rate, optimal_years = find_optimal_recovery_rate(params, max_years=30)
-        actual_recovery_rate = float(max(optimal_rate, 1))
-        warning_message = f"Оптимальный темп: {actual_recovery_rate:.1f}% (полка {optimal_years} лет)"
-    else:
-        sustainable_rate, sustainable_years = find_optimal_recovery_rate(params, max_years=5)
-        if actual_recovery_rate > sustainable_rate:
-            warning_message = (
-                f"Темп {actual_recovery_rate:.1f}% может быть завышен. "
-                f"Устойчиво около {sustainable_rate}% на горизонте {sustainable_years} лет"
-            )
-
+    
     start_year = int(params["start_year"])
     horizon_years = int(params["T_max"])
-    g_nach = params["G_nach"] * 1e9
-    t_pl = params["T_pl"] + 273.15
-    p_pl_init = params["P_pl"]
-    rho_otn = params["rho_otn"]
-    h_skv = params["H_skv"]
-    d_nkt = params["d_NKT"]
-    a_coef = params["a_coef"]
-    b_coef = params["b_coef"]
-    d_p_max = params["dP_max"]
-    k_eks = params["K_eks"]
-    dks_mode = params["DKS_mode"]
-    p_vh_dks = params["P_vh_DKS"]
-    p_vyh_dks = params["P_vyh_DKS"]
-    n_dks_max = params["N_DKS"]
-    vgf_nach = params["VGF_nach"]
-    dvgf_dg = params["dVGF_dG"]
-    vgf_krit = params["VGF_krit"]
-    opt_friction = params["opt_friction"]
-    t_in_dks = float(params.get("T_in_DKS", params["T_pl"]) or params["T_pl"]) + 273.15
-
-    q_cum = 0.0
-    p_pl_curr = p_pl_init
-    vgf = vgf_nach
-    monthly_rows: list[dict[str, Any]] = []
-    days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-
-    initial_plateau_year = _annual_target_bcm(start_year, params, actual_recovery_rate, recovery_by_year)
-    initial_max_potential = _initial_potential_rate_bcm_per_year(params, wells_by_year.get(start_year, params["N_skv"]))
-    plateau_level = min(initial_plateau_year, initial_max_potential) if initial_plateau_year > 0 else initial_max_potential
-
-    # === THREE-PHASE DKS TRACKING ===
-    dks_phase = "growth"  # "growth" -> "plateau" -> "descent"
-    dks_power_max_achieved = 0.0  # Track maximum DKS power reached
-    p_pl_plateau_start = None  # Pressure when plateau started
-    p_pl_plateau_end_threshold = p_pl_init * 0.3  # Exit plateau when P_пл drops to ~30% of initial
-    p_pl_descent_threshold = p_pl_init * 0.26  # Start descent when P_пл < ~26% of initial
-
-    for step in range(horizon_years * 12):
-        year = start_year + step // 12
-        month = (step % 12) + 1
-        days = days_in_month[month - 1]
-        if month == 2 and (year % 4 == 0 and (year % 100 != 0 or year % 400 == 0)):
-            days = 29
-
-        current_wells = int(wells_by_year.get(year, params["N_skv"]))
-        target_annual_rate = float(recovery_by_year.get(year, actual_recovery_rate))
-        target_annual_production = _annual_target_bcm(year, params, actual_recovery_rate, recovery_by_year)
-        target_monthly_production = target_annual_production / 12
-
-        if q_cum > 0:
-            p_pl_curr = MaterialBalance.pressure_from_cumulative(
-                p_pl_init,
-                t_pl,
-                rho_otn,
-                g_nach,
-                q_cum,
-                prev_P_pl=p_pl_curr,
-            )
-
-        if p_pl_curr < 0.5:
-            break
-
-        # Excel/VBA-like constraints: inflow -> bottomhole pressure (p_wf) -> wellhead pressure (theta/S).
-        # DKS turns on when discharge pressure is higher than suction pressure and a positive power is required.
-        theta = float(params.get("theta", 0) or 0)
-        s_param = float(params.get("S_param", 0) or 0)
-        min_debit_well = float(params.get("min_debit_well", 0) or 0)
-        min_p_wellhead = float(params.get("min_p_wellhead", 0) or 0)
-
-        q_well_potential, p_wf_used, p_wh_used = _max_well_rate_with_wellhead_constraints_thousand_m3day(
-            p_pl=p_pl_curr,
-            a_coef=a_coef,
-            b_coef=b_coef,
-            d_p_max=d_p_max,
-            theta=theta,
-            s_param=s_param,
-            min_p_wellhead=min_p_wellhead,
-            min_debit_well=min_debit_well,
-        )
-        q_total_day_potential = q_well_potential * current_wells * k_eks
-        q_monthly_potential = q_total_day_potential * days / 1e6
-
-        meets_target = q_monthly_potential >= target_monthly_production and target_monthly_production > 0
+    g_nach_bcm = params["G_nach"]
+    g_nach_mcm = g_nach_bcm * 1000
+    
+    # Сценарии
+    wells_by_year = schedule_to_year_map(
+        raw_schedule=params.get("wells_schedule"),
+        start_year=start_year,
+        horizon_years=horizon_years,
+        default_value=params["N_skv"],
+        value_column=WELLS_COLUMN,
+        minimum_value=0,
+        cast_type=int,
+    )
+    
+    recovery_by_year = schedule_to_year_map(
+        raw_schedule=params.get("recovery_schedule"),
+        start_year=start_year,
+        horizon_years=horizon_years,
+        default_value=params["target_recovery_rate"],
+        value_column=RECOVERY_RATE_COLUMN,
+        minimum_value=0,
+        cast_type=float,
+    )
+    
+    cumulative_mcm = 0.0
+    yearly_rows = []
+    
+    # Дефолтные параметры для ограничений
+    max_depress_bar = 30.0      # 30 бар
+    pmg_bar = 55.0              # 55 бар
+    max_dks_mw = params.get("N_DKS", 12.0)
+    
+    for year in range(start_year, start_year + horizon_years):
+        n_wells = wells_by_year.get(year, params["N_skv"])
+        target_rate_pct = recovery_by_year.get(year, params["target_recovery_rate"])
+        target_annual_mcm = (target_rate_pct / 100) * g_nach_mcm
         
-        # Production selection based on DKS mode and phase
-        # Simple approach: use target production in all phases, let DKS constrain if needed
-        if target_monthly_production > 0:
-            q_monthly = min(q_monthly_potential, target_monthly_production)
+        if cumulative_mcm + target_annual_mcm > g_nach_mcm:
+            target_annual_mcm = max(0.0, g_nach_mcm - cumulative_mcm)
+        
+        if target_annual_mcm <= 0:
+            break
+        
+        # Проверка возможности добычи
+        test = compute_year(
+            test_prod_mcm=target_annual_mcm,
+            cum_prod_mcm=cumulative_mcm,
+            params=params,
+            n_wells=n_wells,
+            max_depress_bar=max_depress_bar,
+            pmg_bar=pmg_bar,
+            max_dks_mw=max_dks_mw,
+            enforce=True
+        )
+        
+        # Если не прошло — бинарный поиск
+        if not test["ok"]:
+            lo, hi = 0.0, target_annual_mcm
+            for _ in range(30):
+                mid = (lo + hi) / 2
+                r = compute_year(
+                    test_prod_mcm=mid,
+                    cum_prod_mcm=cumulative_mcm,
+                    params=params,
+                    n_wells=n_wells,
+                    max_depress_bar=max_depress_bar,
+                    pmg_bar=pmg_bar,
+                    max_dks_mw=max_dks_mw,
+                    enforce=True
+                )
+                if r["ok"]:
+                    lo = mid
+                    test = r
+                else:
+                    hi = mid
+            actual_prod_mcm = lo
         else:
-            q_monthly = q_monthly_potential
-
-        q_total_day = q_monthly * 1e6 / days if days else 0
-
-        P_before_dks = max(0.01, p_wh_used)
-        dks_on = (p_vyh_dks > P_before_dks + 1e-9)
-
-        # Optional hard cap on DKS throughput (its own plateau), bcm/year -> m3/day
-        q_max_dks_bcm_year = float(params.get("Q_max_DKS", 0) or 0)
-        q_max_dks_day_limit = (q_max_dks_bcm_year * 1e9 / 365) if q_max_dks_bcm_year > 0 else 0
-        if dks_on and q_max_dks_day_limit > 0 and q_total_day > q_max_dks_day_limit:
-            q_total_day = q_max_dks_day_limit
-            q_monthly = q_total_day * days / 1e6
-
-        if dks_mode == "ограничительный":
-            # === THREE-PHASE DKS LOGIC ===
-            if dks_on:
-                # Initialize n_dks_current to avoid UnboundLocalError
-                n_dks_current = 0
-                
-                # Check if DKS is needed: Compare well potential to target production
-                dks_needed = q_monthly_potential < target_monthly_production if target_monthly_production > 0 else False
-                
-                if dks_phase == "growth":
-                    # GROWTH phase: DKS not yet needed or just starting
-                    # Transition to PLATEAU when DKS becomes necessary
-                    if dks_needed:
-                        dks_phase = "plateau"
-                        p_pl_plateau_start = p_pl_curr
-                        dks_power_max_achieved = 0.0
-                        n_dks_current = 0  # Will be set to max in PLATEAU phase next month
-                    else:
-                        # Not yet in plateau, DKS power is 0
-                        n_dks_current = 0
-                
-                elif dks_phase == "plateau":
-                    # PLATEAU phase: DKS is active and helping maintain production
-                    # Transition to DESCENT when pressure becomes critical
-                    if p_pl_curr <= p_pl_descent_threshold:
-                        dks_phase = "descent"
-                        n_dks_current = DKS.power_calc(q_total_day / 1e6, P_before_dks, p_vyh_dks, t_in_dks, rho_otn)
-                    else:
-                        # Calculate DKS power at current production
-                        n_dks_current = DKS.power_calc(q_total_day / 1e6, P_before_dks, p_vyh_dks, t_in_dks, rho_otn)
-                        # Set DKS to maximum during plateau (will constrain production if needed)
-                        n_dks_max_plateau = min(n_dks_max, n_dks_current + 1)  # Allow slightly above current to find max
-                        n_dks_current = n_dks_max  # Target is to maintain max DKS power
-                
-                elif dks_phase == "descent":
-                    # DESCENT phase: Pressure too low, both DKS and production decline
-                    n_dks_current = DKS.power_calc(q_total_day / 1e6, P_before_dks, p_vyh_dks, t_in_dks, rho_otn)
-                    n_dks_current = max(0, n_dks_current)
-                
-                n_dks = n_dks_current
-                
-                # Constrain production by DKS power only in PLATEAU phase
-                if dks_phase == "plateau" and n_dks > 0 and p_vyh_dks > P_before_dks + 1e-9:
-                    q_max_dks = DKS.Q_max_from_power(n_dks, P_before_dks, p_vyh_dks, t_in_dks, rho_otn) * 1e6
-                    if q_max_dks_day_limit > 0:
-                        q_max_dks = min(q_max_dks, q_max_dks_day_limit) if q_max_dks > 0 else q_max_dks_day_limit
-                    if q_max_dks > 0 and q_total_day > q_max_dks:
-                        q_total_day = q_max_dks
-                        q_monthly = q_total_day * days / 1e6
-            else:
-                n_dks = 0
-        else:
-            n_dks = DKS.power_calc(q_total_day / 1e6, P_before_dks, p_vyh_dks, t_in_dks, rho_otn) if dks_on else 0
-
-        # Keep representative pressures for outputs/diagnostics
-        p_zab_max = p_wf_used
-        p_u = P_before_dks
-
-        q_cum += q_monthly * 1e9
-        vgf = WaterInflux.VGF_from_cumulative(vgf_nach, dvgf_dg, q_cum, g_nach, vgf_krit)
-        q_water_m3 = q_monthly * 1e9 * vgf / 1e6
-        q_water_thousand_m3 = q_water_m3 / 1000
-        actual_monthly_recovery_rate = (q_monthly * 12) / (g_nach / 1e9) * 100 if g_nach > 0 else 0
-
-        monthly_rows.append(
-            {
-                "Дата": datetime(year, month, 1),
+            actual_prod_mcm = target_annual_mcm
+        
+        cumulative_mcm += actual_prod_mcm
+        recovery_pct = (cumulative_mcm / g_nach_mcm) * 100 if g_nach_mcm > 0 else 0
+        remaining_mcm = g_nach_mcm - cumulative_mcm
+        
+        yearly_rows.append({
+            "Год": year,
+            "Количество скважин": n_wells,
+            "Целевой темп отбора, %": round(target_rate_pct, 2),
+            "Целевая добыча, млн м³/год": round(target_annual_mcm, 0),
+            "Добыча газа, млн м³/год": round(actual_prod_mcm, 0),
+            "Добыча газа, млрд м³/год": round(actual_prod_mcm / 1000, 3),
+            "Накоплено, млрд м³": round(cumulative_mcm / 1000, 3),
+            "Остаток, млрд м³": round(remaining_mcm / 1000, 3),
+            "КИГ, %": round(recovery_pct, 2),
+            "P_пл, бар": round(test["pRes"], 2),
+            "P_заб, бар": round(test["pWf"], 2),
+            "Депрессия, бар": round(test["depr"], 2),
+            "P_у, бар": round(test["pWh"], 2),
+            "Дебит скв, тыс.м³/сут": round(test["debit"], 2),
+            "Мощность ДКС, МВт": round(test["dks"], 2),
+        })
+        
+        if cumulative_mcm >= g_nach_mcm:
+            break
+    
+    # Конвертация в месячные данные
+    monthly_rows = []
+    month_names = ["Янв", "Фев", "Мар", "Апр", "Май", "Июн", 
+                   "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"]
+    
+    cumulative_mcm = 0
+    for i, year_row in enumerate(yearly_rows):
+        year = year_row["Год"]
+        prod_mcm = year_row["Добыча газа, млн м³/год"]
+        monthly_prod_mcm = prod_mcm / 12
+        
+        prev_row = yearly_rows[i-1] if i > 0 else None
+        
+        for month in range(12):
+            cumulative_mcm += monthly_prod_mcm
+            frac = (month + 0.5) / 12
+            
+            def interp(a, b):
+                if a is None or b is None:
+                    return b if b is not None else a
+                return a + (b - a) * frac
+            
+            monthly_rows.append({
+                "Дата": datetime(year, month + 1, 1),
                 "Год": year,
-                "Квартал": (month - 1) // 3 + 1,
-                "Месяц": month,
-                "Количество скважин": current_wells,
-                "Целевой темп отбора, %": round(target_annual_rate, 3),
-                "Целевая добыча, млрд м³/год": round(target_annual_production, 4),
-                "P_пл, МПа": round(p_pl_curr, 3),
-                "Добыча газа, млрд м³/мес": round(q_monthly, 4),
-                "Добыча газа, млрд м³/год": round(q_monthly * 12, 3),
-                "Накоплено, млрд м³": round(q_cum / 1e9, 3),
-                "Остаток, млрд м³": round(max(0, (g_nach - q_cum) / 1e9), 3),
-                "Темп отбора, %": round(actual_monthly_recovery_rate, 3),
-                "P_у, МПа": round(p_u, 3),
-                "P_заб, МПа": round(p_zab_max, 3),
-                "ВГФ, г/м³": round(vgf, 3),
-                "Добыча воды, тыс. м³/мес": round(q_water_thousand_m3, 3),
-                "Мощность ДКС, МВт": round(n_dks, 3),
-                "На полке": int(meets_target),
-                "Потенциал, млрд м³/мес": round(q_monthly_potential, 4),
-                "DKS_фаза": dks_phase,
-            }
-        )
-
-    if not monthly_rows:
-        wells_schedule, recovery_schedule = _build_output_schedules(params)
-        return {
-            "monthly_df": [],
-            "yearly_df": [],
-            "params": params,
-            "warning": warning_message,
-            "wells_schedule": wells_schedule,
-            "recovery_schedule": recovery_schedule,
-        }
-
-    yearly_acc: dict[int, dict[str, float]] = {}
-    yearly_last: dict[int, dict[str, Any]] = {}
-    yearly_counts: dict[int, int] = {}
-
-    for row in monthly_rows:
-        year = int(row["Год"])
-        yearly_counts[year] = yearly_counts.get(year, 0) + 1
-        acc = yearly_acc.setdefault(
-            year,
-            {
-                "sum_target_rate": 0.0,
-                "sum_target_prod": 0.0,
-                "sum_q_monthly": 0.0,
-                "sum_p_pl": 0.0,
-                "sum_recovery_rate": 0.0,
-                "sum_dks_power": 0.0,
-                "max_wells": 0.0,
-                "max_plateau": 0.0,
-            },
-        )
-        acc["sum_target_rate"] += float(row.get("Целевой темп отбора, %", 0) or 0)
-        acc["sum_target_prod"] += float(row.get("Целевая добыча, млрд м³/год", 0) or 0)
-        acc["sum_q_monthly"] += float(row.get("Добыча газа, млрд м³/мес", 0) or 0)
-        acc["sum_p_pl"] += float(row.get("P_пл, МПа", 0) or 0)
-        acc["sum_recovery_rate"] += float(row.get("Темп отбора, %", 0) or 0)
-        acc["sum_dks_power"] += float(row.get("Мощность ДКС, МВт", 0) or 0)
-        acc["max_wells"] = max(acc["max_wells"], float(row.get("Количество скважин", 0) or 0))
-        acc["max_plateau"] = max(acc["max_plateau"], float(row.get("На полке", 0) or 0))
-        yearly_last[year] = row
-
-    yearly_rows: list[dict[str, Any]] = []
-    for year in sorted(yearly_acc.keys()):
-        n = max(1, yearly_counts.get(year, 1))
-        acc = yearly_acc[year]
-        last_row = yearly_last[year]
-        yearly_rows.append(
-            {
-                "Год": int(year),
-                "Количество скважин": int(round(acc["max_wells"])),
-                "Целевой темп отбора, %": acc["sum_target_rate"] / n,
-                "Целевая добыча, млрд м³/год": acc["sum_target_prod"] / n,
-                "Добыча газа, млрд м³/год": acc["sum_q_monthly"],
-                "Накоплено, млрд м³": float(last_row.get("Накоплено, млрд м³", 0) or 0),
-                "Среднее P_пл, МПа": acc["sum_p_pl"] / n,
-                "Средний темп отбора, %": acc["sum_recovery_rate"] / n,
-                "Средняя мощность ДКС, МВт": acc["sum_dks_power"] / n,
-                "На полке": int(round(acc["max_plateau"])),
-            }
-        )
-
-    wells_schedule, recovery_schedule = _build_output_schedules(params)
-    plateau_years = int(sum(1 for r in yearly_rows if int(r.get("На полке", 0) or 0) == 1))
-
+                "Месяц": month + 1,
+                "Название месяца": month_names[month],
+                "Количество скважин": year_row["Количество скважин"],
+                "Добыча газа, млн м³/мес": round(monthly_prod_mcm, 0),
+                "Добыча газа, млрд м³/мес": round(monthly_prod_mcm / 1000, 4),
+                "Накоплено, млрд м³": round(cumulative_mcm / 1000, 3),
+                "КИГ, %": round((cumulative_mcm / g_nach_mcm) * 100, 2),
+                "P_пл, бар": round(interp(prev_row.get("P_пл, бар") if prev_row else None, year_row["P_пл, бар"]), 2),
+                "P_заб, бар": round(interp(prev_row.get("P_заб, бар") if prev_row else None, year_row["P_заб, бар"]), 2),
+                "P_у, бар": round(interp(prev_row.get("P_у, бар") if prev_row else None, year_row["P_у, бар"]), 2),
+                "Дебит скв, тыс.м³/сут": round(interp(prev_row.get("Дебит скв, тыс.м³/сут") if prev_row else None, year_row["Дебит скв, тыс.м³/сут"]), 2),
+                "Мощность ДКС, МВт": round(interp(prev_row.get("Мощность ДКС, МВт") if prev_row else None, year_row["Мощность ДКС, МВт"]), 2),
+            })
+    
     return {
-        "monthly_df": monthly_rows,
         "yearly_df": yearly_rows,
+        "monthly_df": monthly_rows,
         "params": params,
-        "G_nach": g_nach / 1e9,
-        "plateau_level": round(plateau_level, 3),
-        "plateau_years": plateau_years,
-        "optimal_rate": actual_recovery_rate if plateau_mode == "auto" else None,
-        "warning": warning_message,
-        "wells_schedule": wells_schedule,
-        "recovery_schedule": recovery_schedule,
+        "G_nach": params["G_nach"],
+        "plateau_level": yearly_rows[0]["Добыча газа, млрд м³/год"] if yearly_rows else 0,
+        "plateau_years": len(yearly_rows),
+        "warning": None,
     }

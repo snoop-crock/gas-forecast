@@ -1,11 +1,8 @@
-"""
-Buttons component for Gas Forecast App
-"""
+"""Buttons component for Gas Forecast App"""
 
 
 def create_buttons(colors):
     """Создает кнопки управления"""
-    import dash
     from dash import html
 
     return html.Div([

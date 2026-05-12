@@ -2,41 +2,34 @@ import dash
 from dash import dcc, html
 import pandas as pd
 
+
 def find_plateau_level(yearly_df):
-    """
-    Определяет уровень полки как среднее значение за 3 последовательных года
-    с минимальным отклонением (истинное плато, а не случайный пик)
-    """
+    """Определяет уровень полки"""
     if len(yearly_df) < 3:
         return yearly_df['Добыча газа, млрд м³/год'].max()
     
     best_plateau = 0
     best_std = float('inf')
     
-    # Ищем 3 последовательных года с минимальным стандартным отклонением
     for i in range(len(yearly_df) - 2):
         window = yearly_df.iloc[i:i+3]['Добыча газа, млрд м³/год']
         mean = window.mean()
         std = window.std()
         
-        # Чем меньше отклонение, тем стабильнее полка
         if std < best_std and mean > 0:
             best_std = std
             best_plateau = mean
     
-    # Если нашли стабильный участок — это полка
-    if best_plateau > 0 and best_std < 0.1:  # отклонение менее 0.1 млрд м³/год
+    if best_plateau > 0 and best_std < 0.1:
         return round(best_plateau, 2)
     
-    # Иначе берем максимальное значение за первые 5 лет
     early_years = yearly_df.head(min(5, len(yearly_df)))
     return round(early_years['Добыча газа, млрд м³/год'].max(), 2)
 
+
 def create_results_tab(results, colors, period='monthly'):
-    """
-    Создает вкладку с результатами
-    """
-    if not results or 'monthly_df' not in results:
+    """Создает вкладку с результатами"""
+    if not results or 'monthly_df' not in results or not results['monthly_df']:
         return html.Div(
             "Нет данных. Выполните расчет на вкладке 'Ввод параметров'.",
             style={'textAlign': 'center', 'marginTop': 50,
@@ -44,37 +37,34 @@ def create_results_tab(results, colors, period='monthly'):
         )
 
     monthly_df = pd.DataFrame(results['monthly_df'])
-    yearly_df = pd.DataFrame(results['yearly_df'])
+    
+    # Если нет yearly_df, создаём из monthly_df
+    if 'yearly_df' not in results or not results['yearly_df']:
+        yearly_df = monthly_df.groupby('Год', as_index=False).agg({
+            'Добыча газа, млрд м³/мес': 'sum',
+            'Накоплено, млрд м³': 'last',
+            'КИГ, %': 'last',
+            'На полке': 'max',
+        }).rename(columns={'Добыча газа, млрд м³/мес': 'Добыча газа, млрд м³/год'})
+    else:
+        yearly_df = pd.DataFrame(results['yearly_df'])
 
     if len(yearly_df) == 0:
         return html.Div("Нет данных для отображения",
                         style={'textAlign': 'center', 'marginTop': 50, 'color': colors['danger']})
 
-    # ========== ФОРМАТИРОВАНИЕ ДАННЫХ ==========
-    # Год в int (целое число)
+    # ========== УНИВЕРСАЛЬНОЕ ФОРМАТИРОВАНИЕ (без жёстких колонок) ==========
     yearly_df['Год'] = yearly_df['Год'].astype(int)
     monthly_df['Год'] = monthly_df['Год'].astype(int)
     
-    # Округление годовых данных (3 знака после запятой)
-    yearly_df['Добыча газа, млрд м³/год'] = yearly_df['Добыча газа, млрд м³/год'].round(3)
-    yearly_df['Накоплено, млрд м³'] = yearly_df['Накоплено, млрд м³'].round(3)
-    yearly_df['Среднее P_пл, МПа'] = yearly_df['Среднее P_пл, МПа'].round(3)
-    yearly_df['Средний темп отбора, %'] = yearly_df['Средний темп отбора, %'].round(3)
-    yearly_df['Средняя мощность ДКС, МВт'] = yearly_df['Средняя мощность ДКС, МВт'].round(3)
-    yearly_df['На полке'] = yearly_df['На полке'].astype(int)
+    # Округляем только существующие колонки
+    for col in yearly_df.columns:
+        if yearly_df[col].dtype in ['float64', 'float32']:
+            yearly_df[col] = yearly_df[col].round(3)
     
-    # Округление помесячных данных (3 знака после запятой)
-    monthly_df['P_пл, МПа'] = monthly_df['P_пл, МПа'].round(3)
-    monthly_df['Добыча газа, млрд м³/мес'] = monthly_df['Добыча газа, млрд м³/мес'].round(3)
-    monthly_df['Накоплено, млрд м³'] = monthly_df['Накоплено, млрд м³'].round(3)
-    monthly_df['Остаток, млрд м³'] = monthly_df['Остаток, млрд м³'].round(3)
-    monthly_df['Темп отбора, %'] = monthly_df['Темп отбора, %'].round(3)
-    monthly_df['P_у, МПа'] = monthly_df['P_у, МПа'].round(3)
-    monthly_df['P_заб, МПа'] = monthly_df['P_заб, МПа'].round(3)
-    monthly_df['ВГФ, г/м³'] = monthly_df['ВГФ, г/м³'].round(3)
-    monthly_df['Добыча воды, тыс. м³/мес'] = monthly_df['Добыча воды, тыс. м³/мес'].round(3)
-    monthly_df['Мощность ДКС, МВт'] = monthly_df['Мощность ДКС, МВт'].round(3)
-    monthly_df['На полке'] = monthly_df['На полке'].astype(int)
+    for col in monthly_df.columns:
+        if monthly_df[col].dtype in ['float64', 'float32'] and col not in ['Год', 'Месяц', 'Квартал', 'Дней в месяце', 'Количество скважин']:
+            monthly_df[col] = monthly_df[col].round(3)
 
     # ========== СТАТИСТИКА ==========
     max_gas = find_plateau_level(yearly_df)
@@ -83,17 +73,17 @@ def create_results_tab(results, colors, period='monthly'):
         if row['Добыча газа, млрд м³/год'] >= max_gas * 0.95:
             plateau_year = row['Год']
             break
+    
     total_produced = yearly_df['Накоплено, млрд м³'].iloc[-1]
-    initial_gas = results.get('G_nach', yearly_df['Накоплено, млрд м³'].iloc[0])
+    initial_gas = results.get('G_nach', 100)
     recovery_factor = min((total_produced / initial_gas * 100), 100) if initial_gas > 0 else 0
 
     # Год начала падения
-    plateau_level = max_gas
     decline_start_year = None
     plateau_started = False
     plateau_count = 0
     for _, row in yearly_df.iterrows():
-        if row['Добыча газа, млрд м³/год'] >= plateau_level * 0.95:
+        if row['Добыча газа, млрд м³/год'] >= max_gas * 0.95:
             plateau_started = True
             plateau_count += 1
         elif plateau_started and plateau_count >= 2:
@@ -132,21 +122,20 @@ def create_results_tab(results, colors, period='monthly'):
         # ========== ПОШАГОВЫЕ РЕЗУЛЬТАТЫ ==========
         html.H3("Пошаговые результаты", style={'marginBottom': 20}),
 
-        # Кнопки переключения между месячным и годовым
+        # Кнопки переключения
         html.Div([
             html.Button(
                 "📅 Помесячно", 
                 id='btn-monthly',
                 n_clicks=0,
                 style={
-                    'backgroundColor': '#1975FA' if period == 'monthly' else '#e0e0e0',
+                    'backgroundColor': '#faae19' if period == 'monthly' else '#e0e0e0',
                     'color': 'white' if period == 'monthly' else '#333',
                     'border': 'none',
                     'padding': '8px 24px',
                     'borderRadius': '8px 0 0 8px',
                     'cursor': 'pointer',
                     'fontWeight': '500',
-                    'transition': 'all 0.2s'
                 }
             ),
             html.Button(
@@ -154,14 +143,13 @@ def create_results_tab(results, colors, period='monthly'):
                 id='btn-yearly',
                 n_clicks=0,
                 style={
-                    'backgroundColor': '#1975FA' if period == 'yearly' else '#e0e0e0',
+                    'backgroundColor': '#faae19' if period == 'yearly' else '#e0e0e0',
                     'color': 'white' if period == 'yearly' else '#333',
                     'border': 'none',
                     'padding': '8px 24px',
                     'borderRadius': '0 8px 8px 0',
                     'cursor': 'pointer',
                     'fontWeight': '500',
-                    'transition': 'all 0.2s'
                 }
             ),
         ], style={'marginBottom': 20, 'display': 'inline-flex'}),
@@ -169,7 +157,7 @@ def create_results_tab(results, colors, period='monthly'):
         # Контейнер для таблицы
         html.Div(id='table-container', style={'marginTop': 20}),
 
-        # Скрытое хранилище для выбранного периода
+        # Скрытое хранилище
         dcc.Store(id='period-store', data=period),
 
     ])

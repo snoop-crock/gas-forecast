@@ -1,3 +1,5 @@
+.gitignore
+
 # Python
 __pycache__/
 *.pyc
@@ -36,3 +38,6 @@ Thumbs.db
 
 # pyinstaller
 *.spec
+
+# my work
+app_debug.py
